@@ -58,6 +58,9 @@ try:
     import cupy as cp
     CUPY_AVAILABLE = True
 except ImportError:
+    # Sentinel so ``xp is cp`` / ``isinstance(..., cp.ndarray)`` checks
+    # below don't NameError when cupy isn't installed.
+    cp = None
     CUPY_AVAILABLE = False
 
 

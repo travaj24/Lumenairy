@@ -26,6 +26,9 @@ try:
     import cupy as cp
     CUPY_AVAILABLE = True
 except ImportError:
+    # Sentinel so ``xp is cp`` checks below don't NameError when cupy
+    # isn't installed (CI / pure-CPU users).
+    cp = None
     CUPY_AVAILABLE = False
 
 # Optional fused-expression backend ------------------------------------------
