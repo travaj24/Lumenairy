@@ -25,9 +25,9 @@ _LIB_ROOT = os.path.normpath(os.path.join(_HERE, '..', '..'))
 if _LIB_ROOT not in sys.path:
     sys.path.insert(0, _LIB_ROOT)
 
-import optical_propagation as op  # noqa: E402
-from optical_propagation.prescriptions import thorlabs_lens  # noqa: E402
-from optical_propagation.raytrace import (  # noqa: E402
+import lumenairy as op  # noqa: E402
+from lumenairy.prescriptions import thorlabs_lens  # noqa: E402
+from lumenairy.raytrace import (  # noqa: E402
     surfaces_from_prescription, system_abcd)
 
 

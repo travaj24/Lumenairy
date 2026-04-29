@@ -2,7 +2,7 @@
 
 Compare the wave OPD produced by ``apply_real_lens`` against the
 geometric OPL accumulated by the sequential ray tracer in
-``optical_propagation.raytrace``.  The ray tracer uses exact
+``lumenairy.raytrace``.  The ray tracer uses exact
 vector Snell's law at each surface, so its OPL is the physically
 correct reference for any thin-element phase-screen model.
 
@@ -56,18 +56,18 @@ _LIB_ROOT = os.path.normpath(os.path.join(_HERE, '..', '..'))
 if _LIB_ROOT not in sys.path:
     sys.path.insert(0, _LIB_ROOT)
 
-import optical_propagation as op
-from optical_propagation.lenses import apply_real_lens, apply_real_lens_traced
-from optical_propagation.analysis import (
+import lumenairy as op
+from lumenairy.lenses import apply_real_lens, apply_real_lens_traced
+from lumenairy.analysis import (
     remove_wavefront_modes,
     opd_pv_rms,
     wave_opd_1d,
 )
-from optical_propagation.prescriptions import (
+from lumenairy.prescriptions import (
     export_zemax_lens_data,
     export_zemax_zmx,
 )
-from optical_propagation.raytrace import (
+from lumenairy.raytrace import (
     surfaces_from_prescription,
     trace,
     _make_bundle,
@@ -178,7 +178,7 @@ def compute_geometric_opd(prescription, wavelength, aperture, n_rays=401):
     # last surface, but the wave model's exit field is at the flat
     # vertex plane z = 0.  Transfer each ray from sag to vertex in
     # the exit medium so OPL references a common flat plane.
-    from optical_propagation.glass import get_glass_index as _ggi
+    from lumenairy.glass import get_glass_index as _ggi
     n_exit = _ggi(surfaces[-1].glass_after, wavelength)
     with np.errstate(divide='ignore', invalid='ignore'):
         t_vtx = np.where(

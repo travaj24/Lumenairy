@@ -32,8 +32,8 @@ from __future__ import annotations
 
 import numpy as np
 
-import optical_propagation as op
-from optical_propagation.prescriptions import (
+import lumenairy as op
+from lumenairy.prescriptions import (
     make_singlet,
     make_doublet,
     thorlabs_lens,

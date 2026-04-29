@@ -40,4 +40,5 @@ output/
 *.pdf
 *.fits
 *.dat
+*.log
 doe_cache/
