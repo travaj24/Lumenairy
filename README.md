@@ -1,14 +1,13 @@
 # lumenairy
 
-[![Validate](https://github.com/travaj24/Lumenairy/actions/workflows/validate.yml/badge.svg)](https://github.com/travaj24/Lumenairy/actions/workflows/validate.yml)
-[![Python](https://img.shields.io/badge/python-3.9%20|%203.10%20|%203.11%20|%203.12%20|%203.13-blue)](https://www.python.org/downloads/)
+[![PyPI](https://img.shields.io/pypi/v/lumenairy.svg)](https://pypi.org/project/lumenairy/)
+[![Validate](https://github.com/travaj24/LumenAiry/actions/workflows/validate.yml/badge.svg)](https://github.com/travaj24/LumenAiry/actions/workflows/validate.yml)
+[![Python](https://img.shields.io/pypi/pyversions/lumenairy.svg)](https://pypi.org/project/lumenairy/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-3.2.14.1-informational)](CHANGELOG.md)
 
 A comprehensive Python library for coherent optical beam propagation and
 manipulation using the Angular Spectrum Method (ASM) and related techniques.
 
-**Version:** 3.2.14.1
 **Author:** Andrew Traverso
 
 ## What's new in 3.2.14
