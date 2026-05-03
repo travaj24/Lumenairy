@@ -96,7 +96,7 @@ to that phase of design work.
   `QMainWindow.saveState()` / `restoreState()`.
 - User-initiated dock visibility changes (close button, View menu
   toggle) automatically update the active workspace's dock list.
-- Persistence to `QSettings('Neurophos', 'OpticalDesigner')` —
+- Persistence to `QSettings('lumenairy', 'OpticalDesigner')` —
   custom workspaces survive restart.
 - Wired into `main_window.py` with `_build_workspace_bar()` +
   `_init_workspaces()` + a `View > Workspace` submenu (with Reset

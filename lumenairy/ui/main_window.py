@@ -471,7 +471,7 @@ class MainWindow(QMainWindow):
         # Restore from QSettings if available.
         try:
             from PySide6.QtCore import QSettings
-            s = QSettings('Neurophos', 'OpticalDesigner')
+            s = QSettings('lumenairy', 'OpticalDesigner')
             payload = s.value('workspaces/data')
             if payload:
                 self.workspace_mgr.load_json(payload)
@@ -733,7 +733,7 @@ class MainWindow(QMainWindow):
         try:
             from PySide6.QtCore import QSettings
             self.workspace_mgr.save_current_layout()
-            s = QSettings('Neurophos', 'OpticalDesigner')
+            s = QSettings('lumenairy', 'OpticalDesigner')
             s.setValue('workspaces/data', self.workspace_mgr.to_json())
         except Exception:
             pass
@@ -2055,7 +2055,7 @@ class MainWindow(QMainWindow):
     def _recent_files(self):
         try:
             from PySide6.QtCore import QSettings
-            s = QSettings('Neurophos', 'OpticalDesigner')
+            s = QSettings('lumenairy', 'OpticalDesigner')
             v = s.value('recent_files') or []
             if isinstance(v, str):
                 v = [v]
@@ -2069,7 +2069,7 @@ class MainWindow(QMainWindow):
             recents = [p for p in self._recent_files() if p != path]
             recents.insert(0, path)
             recents = recents[:self._RECENT_LIMIT]
-            s = QSettings('Neurophos', 'OpticalDesigner')
+            s = QSettings('lumenairy', 'OpticalDesigner')
             s.setValue('recent_files', recents)
             if hasattr(self, 'welcome_widget'):
                 self.welcome_widget.set_recent_files(recents)

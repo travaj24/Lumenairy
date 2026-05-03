@@ -244,6 +244,7 @@ from .optimize import (
     MatchIdealSystemMerit,
     MatchTargetOPDMerit,
     ZernikeCoefficientMerit,
+    LGAberrationMerit,
     CompositeMerit,
     CallableMerit,
     MultiWavelengthMerit,
@@ -256,6 +257,25 @@ from .optimize import (
     EvaluationContext,
     DesignResult,
     design_optimize,
+)
+
+# ── Phase-space asymptotic propagator + LG aberration tensor ────────────
+from .asymptotic import (
+    CanonicalPolyFit,
+    AberrationTensorResult,
+    fit_canonical_polynomials,
+    aberration_tensor,
+    propagate_modal_asymptotic,
+    solve_envelope_stationary,
+    lg_polynomial,
+    hg_polynomial,
+    evaluate_lg_mode,
+    evaluate_hg_mode,
+    decompose_lg,
+    decompose_hg,
+    lg_seidel_label,
+    gaussian_moment_2d,
+    gaussian_moment_table_2d,
 )
 
 # ── DOE / Gratings / Phase I/O ──────────────────────────────────────────
@@ -432,7 +452,7 @@ from .plotting import (
     compute_jones_pupil,
 )
 
-__version__ = "3.2.15"
+__version__ = "3.3.0"
 
 __all__ = [
     # Propagation
@@ -582,6 +602,7 @@ __all__ = [
     'MatchIdealSystemMerit',
     'MatchTargetOPDMerit',
     'ZernikeCoefficientMerit',
+    'LGAberrationMerit',
     'CompositeMerit',
     'CallableMerit',
     'MultiWavelengthMerit',
@@ -594,6 +615,22 @@ __all__ = [
     'EvaluationContext',
     'DesignResult',
     'design_optimize',
+    # Phase-space asymptotic propagator + LG aberration tensor
+    'CanonicalPolyFit',
+    'AberrationTensorResult',
+    'fit_canonical_polynomials',
+    'aberration_tensor',
+    'propagate_modal_asymptotic',
+    'solve_envelope_stationary',
+    'lg_polynomial',
+    'hg_polynomial',
+    'evaluate_lg_mode',
+    'evaluate_hg_mode',
+    'decompose_lg',
+    'decompose_hg',
+    'lg_seidel_label',
+    'gaussian_moment_2d',
+    'gaussian_moment_table_2d',
     # Vector diffraction
     'richards_wolf_focus',
     'debye_wolf_psf',

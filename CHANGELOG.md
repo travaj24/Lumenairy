@@ -2,6 +2,130 @@
 
 All notable changes to the core library are documented here.
 
+## [3.3.0] — 2026-05-03
+
+### Feature — Phase-space asymptotic propagator and Laguerre-Gaussian aberration tensor
+
+A new module `lumenairy.asymptotic` implementing the closed-form
+Gaussian-moment evaluation of the phase-space (Maslov) diffraction
+integral.  This complements
+the existing `apply_real_lens_maslov` -- which evaluates the same
+underlying integral by direct Chebyshev-quadrature in v_2 -- by
+replacing the quadrature with a finite Wick-contracted moment over a
+complex-symmetric covariance matrix built from the Chebyshev
+polynomial fit.
+
+**What's new:**
+
+- **`fit_canonical_polynomials(prescription, wavelength, ...)` ->
+  `CanonicalPolyFit`**.  Trace a 4-D Chebyshev-node grid through any
+  prescription, fit Phi(s2, v2) and s1(s2, v2) as 4-variable
+  Chebyshev tensor-product polynomials, and return a fit container
+  with analytic gradient evaluation.  Sub-microwave residual on
+  refractive systems; includes the linear-phase-extraction trick of
+  paper 1 Section 5 for diffractive surfaces at non-zero orders.
+
+- **`aberration_tensor(fit, s2_image, ...)` -> `AberrationTensorResult`**.
+  Compute the Laguerre-Gaussian aberration tensor T_{k;n,m} at a
+  chief-ray image point.  Indices (p, ell) of the output basis
+  correspond directly to classical Seidel/Zernike aberrations:
+  (0, 0) is piston/Strehl, (1, 0) is defocus, (2, 0) is primary
+  spherical, (1, +-1) is coma, (0, +-2) is astigmatism, (0, +-3)
+  is trefoil, etc.  Closed-form Wick-contracted Gaussian moment;
+  no quadrature.
+
+- **`propagate_modal_asymptotic(fit, source_amplitudes,
+  pupil_amplitudes, ...)` -> ndarray**.  Closed-form leading-order
+  asymptotic propagator on a 2-D output grid.  Reduces to Collins'
+  ABCD law in the source-dominated limit (large source waist) and
+  to the Fourier-of-pupil diffraction-limited spot in the
+  pupil-dominated limit; interpolates smoothly between with no
+  special handling of caustics.  ~10**3 to 10**4 times faster per
+  pixel than direct quadrature; with NaN guards on Newton
+  divergence near caustics or out-of-box pixels.
+
+- **`solve_envelope_stationary(fit, s2, source_point, w_s, w_p, ...)`**.
+  Newton-solve the envelope-stationary equation (paper 2 eq. 9) for
+  the v_2* that maximises the joint Gaussian envelope.  Used inside
+  the propagator and the aberration tensor; exposed for users who
+  want to inspect the chief-ray geometry directly.
+
+- **`LGAberrationMerit(targets={(p, ell): weight, ...},
+  field_points=[...], ...)`**.  A new `MeritTerm` subclass that
+  drops directly into `design_optimize`.  Targets named aberration
+  channels (defocus, spherical, coma, ...) by output LG index;
+  single-call evaluation via `aberration_tensor`.  No wave leg
+  required (`needs_wave = False`), so the merit runs at
+  millisecond-per-evaluation cost while measuring the same
+  physically-named aberrations the wave leg cares about.
+
+- **LG / HG basis utilities** (`lg_polynomial`, `hg_polynomial`,
+  `evaluate_lg_mode`, `evaluate_hg_mode`, `decompose_lg`,
+  `decompose_hg`, `lg_seidel_label`).  Polynomial-coefficient
+  representation of the Laguerre-Gaussian and Hermite-Gaussian
+  bases as Cartesian polynomial * shared Gaussian envelope -- the
+  form needed by the closed-form Gaussian-moment integrators.
+  Verified orthonormal to machine precision on circular
+  (LG, w=1mm) and elliptical (HG, wx=1mm wy=1.5mm) cases.
+
+- **Wick moment utilities** (`gaussian_moment_2d`,
+  `gaussian_moment_table_2d`).  Closed-form 2-D Gaussian moment
+  evaluator for complex-symmetric covariances, with a moment-table
+  builder for amortising across many mode-pair contractions.
+  Verified against Isserlis identities and direct numerical
+  quadrature.
+
+**Why this matters for design optimisation:**
+
+The wave-leg-aware merits (`StrehlMerit`, `RMSWavefrontMerit`, etc.)
+are physically faithful but expensive (full ASM propagation per
+evaluation).  The ray-leg-only merits (`SphericalSeidelMerit`,
+`FocalLengthMerit`) are cheap but only see paraxial geometry; on
+high-NA / strongly-aberrated systems they can drive an optimisation
+in directions the wave leg disagrees with.
+
+`LGAberrationMerit` is the missing middle tier:  wave-leg-faithful
+quantities (the named aberrations the diffraction integral sees) at
+ray-leg-only cost.  It is the recommended primary merit for
+diffraction-limited design optimisation that needs to converge
+quickly across many parameter sweeps (e.g. radii + thicknesses +
+conics + aspherics simultaneously).
+
+**Validation:**
+
+A new test file `validation/test_asymptotic.py` covers all 32
+identities and end-to-end paths:
+
+- LG / HG basis orthonormality (round / elliptical waist) to 1e-14.
+- Wick moment identities:  unit zeroth moment, second moments
+  match Sigma_ij to 1e-12, fourth-moment Isserlis identities,
+  hand-computed sixth-moment correctness, closed-form vs.
+  numerical quadrature agreement to 1e-15.
+- Polynomial multiply, shift, and linear substitution unit tests.
+- LG / HG decomposition round-trip recovers a known mode.
+- Canonical fit:  sub-microwave Phi residual on N-BK7 singlet,
+  round-trip evaluation matches direct ray trace, J = ds1/dv2
+  has non-trivial magnitude (catches single-source-point
+  degeneracy), in_box mask correctness, linear-phase round-trip.
+- Newton stationary solver converges in 1 iteration on a clean
+  on-axis singlet test.
+- Modal propagator:  finite-valued field, PSF peaks at the
+  on-axis chief-ray image point.
+- Aberration tensor:  evaluates end-to-end with the right shape
+  and finite content.
+- LGAberrationMerit:  evaluates without error, responds to
+  curvature changes, returns a finite penalty when the prescription
+  is degenerate (no exceptions propagated to the optimiser).
+
+> Validation: 32/32 new tests pass.  Full library suite of 17
+> existing files re-runs green:  no regressions introduced.
+
+**Compatibility:**
+
+No breaking changes.  All existing APIs unchanged.  New module is
+purely additive; new merit term subclasses `MeritTerm` and uses the
+same `EvaluationContext` as every other merit.
+
 ## [3.2.15] — 2026-05-03
 
 ### Feature — `apply_doe_phase_traced`: grating diffraction-order shift for ray bundles
@@ -268,7 +392,7 @@ Core library unchanged.
   - Added handlers for add / rename / duplicate / delete / manage,
     plus a `View > Workspace` submenu (with Reset to Defaults).
   - Added `closeEvent` to flush the current layout and persist all
-    workspaces to `QSettings('Neurophos', 'OpticalDesigner')` so
+    workspaces to `QSettings('lumenairy', 'OpticalDesigner')` so
     custom workspaces survive restart.
   - Per-tab dock geometry preserved: `save_current_layout()` snapshots
     `saveState()` into the outgoing workspace before each switch, so

@@ -10,6 +10,66 @@ manipulation using the Angular Spectrum Method (ASM) and related techniques.
 
 **Author:** Andrew Traverso
 
+## What's new in 3.3.0
+
+A new module **`lumenairy.asymptotic`** implementing the closed-form
+phase-space (Maslov) diffraction propagator and Laguerre-Gaussian
+aberration tensor.  This is the
+"missing middle tier" between expensive wave-leg merits
+(`StrehlMerit`, `RMSWavefrontMerit`) and cheap ray-leg-only merits
+(`SphericalSeidelMerit`, `FocalLengthMerit`):  wave-leg-faithful
+quantities (the named aberrations the diffraction integral sees) at
+ray-leg-only evaluation cost.
+
+- **`fit_canonical_polynomials`** — Trace a 4-D Chebyshev-node grid
+  through any prescription, fit Phi(s2, v2) and s1(s2, v2) as
+  4-variable Chebyshev tensor-product polynomials, expose analytic
+  gradient evaluation.  Sub-microwave residual on refractive
+  systems.
+
+- **`aberration_tensor`** — Evaluate the LG aberration tensor
+  T_{k;n,m} at a chief-ray image point.  Indices (p, ell)
+  correspond directly to classical Seidel/Zernike aberrations:
+  (1, 0) is defocus, (2, 0) is primary spherical, (1, +-1) is coma,
+  (0, +-2) is astigmatism, etc.  Closed-form Wick-contracted
+  Gaussian moment, no quadrature.
+
+- **`propagate_modal_asymptotic`** — Closed-form leading-order
+  asymptotic propagator on a 2-D output grid.  Reduces to Collins'
+  ABCD in the source-dominated limit and Fourier-of-pupil in the
+  pupil-dominated limit; interpolates smoothly with no caustic
+  pathology.  ~10**3-10**4 times faster per pixel than direct
+  quadrature.
+
+- **`LGAberrationMerit`** — New `MeritTerm` subclass that drops
+  into `design_optimize`.  Specifies named aberration channels to
+  suppress (defocus, spherical, coma, ...); evaluates the closed-
+  form tensor in milliseconds per merit call.  No wave leg required.
+
+  ```python
+  merit = op.LGAberrationMerit(
+      targets={(2, 0): 1.0,    # primary spherical
+               (1, 1): 1.0,    # coma (sin)
+               (1, -1): 1.0,   # coma (cos)
+               (0, 2): 1.0, (0, -2): 1.0},   # astigmatism
+      field_points=[(0.0, 0.0), (5e-3, 0.0), (0.0, 5e-3)],
+  )
+  ```
+
+- **LG / HG basis utilities** — `lg_polynomial`, `hg_polynomial`,
+  `evaluate_lg_mode`, `evaluate_hg_mode`, `decompose_lg`,
+  `decompose_hg`, `lg_seidel_label`.
+
+- **Wick moment utilities** — `gaussian_moment_2d`,
+  `gaussian_moment_table_2d`.  Closed-form 2-D Gaussian moments for
+  complex-symmetric covariances.
+
+> Validation:  32 new physics-faithful tests in
+> `validation/test_asymptotic.py` (LG orthonormality to 1e-14,
+> Wick / Isserlis identities, fit round-trip, modal propagator PSF
+> peak location, end-to-end LGAberrationMerit).  Full existing test
+> suite re-runs green:  no regressions.  No breaking API changes.
+
 ## What's new in 3.2.15
 
 - **`apply_doe_phase_traced`** — new ray-trace primitive for splitting
@@ -743,13 +803,35 @@ GPU / multi-threaded FFT acceleration.
   with arbitrary path-based free variables and bounds
 - **`MeritTerm`** building blocks: `FocalLengthMerit`,
   `BackFocalLengthMerit`, `SphericalSeidelMerit`, `StrehlMerit`,
-  `RMSWavefrontMerit`, `SpotSizeMerit`, `ChromaticFocalShiftMerit`
+  `RMSWavefrontMerit`, `SpotSizeMerit`, `ChromaticFocalShiftMerit`,
+  **`LGAberrationMerit`** (closed-form named aberration suppression
+  via the LG aberration tensor — see Phase-space asymptotic propagator)
 - **`design_optimize`** — main driver wrapping `scipy.optimize`
   (L-BFGS-B / SLSQP / trust-constr / `lm`).  Wave leg only runs when a
   wave-based merit term needs it; pure-geometric optimization is
   sub-second for typical lenses
 - `lm` method routes through `scipy.optimize.least_squares`, which uses
   Householder QR with column pivoting under the hood
+
+### Phase-space asymptotic propagator (`lumenairy.asymptotic`)
+- **`fit_canonical_polynomials`** — 4-variable Chebyshev tensor-product
+  fit of `Phi(s2, v2)` and `s1(s2, v2)` from a ray-traced grid; sub-
+  microwave residuals on refractive systems
+- **`aberration_tensor`** — closed-form Laguerre-Gaussian aberration
+  tensor whose indices correspond directly to classical Seidel/Zernike
+  aberrations (defocus, spherical, coma, astigmatism, trefoil, ...)
+- **`propagate_modal_asymptotic`** — closed-form leading-order Maslov
+  propagator; Collins-ABCD in source-dominated limit, Fourier-of-pupil
+  in pupil-dominated limit; ~10³-10⁴× faster per pixel than direct
+  Maslov quadrature
+- **`solve_envelope_stationary`** — Newton-solve the chief-ray
+  envelope-stationary equation directly on the Chebyshev fit
+- **LG / HG basis utilities** — `lg_polynomial`, `hg_polynomial`,
+  `evaluate_lg_mode`, `evaluate_hg_mode`, `decompose_lg`, `decompose_hg`,
+  `lg_seidel_label`
+- **Wick moment utilities** — `gaussian_moment_2d`,
+  `gaussian_moment_table_2d` for 2-D Gaussian moments under complex-
+  symmetric covariance
 
 ## Installation
 

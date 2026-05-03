@@ -35,7 +35,7 @@ docks no longer all crowd the screen at once.
   docks (e.g. System Data, Element Table) as always visible.
 - **Export / Import** the workspace set as a `.workspace` JSON
   file to share custom layouts between machines.
-- Persists to `QSettings('Neurophos', 'OpticalDesigner')`; an
+- Persists to `QSettings('lumenairy', 'OpticalDesigner')`; an
   automatic migration appends new default workspaces on upgrade
   without overwriting customisations.
 

@@ -1136,6 +1136,159 @@ class ZernikeCoefficientMerit(MeritTerm):
         return self.weight * total
 
 
+class LGAberrationMerit(MeritTerm):
+    """Penalise specified Laguerre-Gaussian aberration-tensor channels
+    via the closed-form modal asymptotic propagator (paper 2,
+    Section 7).
+
+    Each entry ``L_{(p, ell), n}(s_2^img)`` of the LG aberration tensor
+    is the projection of the system's leading-order asymptotic
+    image-plane field onto a named classical aberration channel:
+    ``(0, 0)`` is piston/Strehl, ``(1, 0)`` is defocus, ``(2, 0)`` is
+    primary spherical, ``(0, +-1)`` is tilt, ``(1, +-1)`` is coma,
+    ``(0, +-2)`` is astigmatism, ``(0, +-3)`` is trefoil.  Driving a
+    given ``|L_{(p, ell), 0}|^2`` to zero suppresses that aberration
+    in the merit-function loop without invoking the wave leg.
+
+    The merit is computed from a Chebyshev tensor-product fit of the
+    prescription's canonical map ``Phi(s2, v2), s1(s2, v2)``
+    (paper 1, Section 3) -- a single fit drives all targeted
+    aberration channels at all chosen field points.
+
+    Parameters
+    ----------
+    targets : dict
+        Map from output LG index ``(p, ell)`` to a float weight.  Each
+        listed channel contributes ``|L_{(p, ell), 0}(s_2^img)|^2``
+        times the entry weight.  Channels not listed are unconstrained.
+        Common targets:
+
+            {(2, 0): 1.0, (1, 1): 1.0, (1, -1): 1.0, (0, 2): 1.0, (0, -2): 1.0}
+
+        suppresses primary spherical, both coma orientations, and
+        both astigmatism orientations.
+    field_points : list of (float, float), optional
+        Source-plane points [m] at which to evaluate the tensor.
+        Default: a single on-axis point ``[(0.0, 0.0)]``.  Each field
+        point's contribution is summed.
+    image_points : list of (float, float), optional
+        Image-plane evaluation points (one per field point).  If None,
+        defaults to the chief-ray landing of each source point (which
+        the merit evaluator finds via Newton).
+    w_s, w_p : float
+        Source-plane and pupil-plane Gaussian waists [m and direction
+        cosine].  Defaults: ``w_s = 50e-6`` (50 um), ``w_p = 0.05``
+        (50 mrad).
+    w_o : float, optional
+        Output Gaussian waist [m].  Default: derived per-pixel from
+        the local complex beam matrix.
+    fit_kwargs : dict, optional
+        Additional keyword arguments passed to
+        ``fit_canonical_polynomials``:  ``poly_order``,
+        ``source_box_half``, ``pupil_box_half``, ``n_field``,
+        ``n_pupil``, ``extract_linear_phase``, ``object_distance``.
+    weight : float, default 1.0
+    name : str, optional
+
+    See Also
+    --------
+    lumenairy.asymptotic.aberration_tensor :  raw tensor evaluator.
+    SphericalSeidelMerit :  Seidel-coefficient-based primary-spherical
+        merit (uses paraxial coefficients; LGAberrationMerit's full
+        non-paraxial generalisation is preferred for high-NA work).
+    """
+
+    needs_wave = False
+    name = 'LGAberration'
+
+    def __init__(self, targets,
+                 field_points=None,
+                 image_points=None,
+                 w_s=50e-6, w_p=0.05, w_o=None,
+                 fit_kwargs=None,
+                 weight=1.0,
+                 name=None):
+        if not targets:
+            raise ValueError("LGAberrationMerit: targets dict is empty")
+        self.targets = {tuple(k): float(v) for k, v in targets.items()}
+        if field_points is None:
+            field_points = [(0.0, 0.0)]
+        self.field_points = [tuple(p) for p in field_points]
+        if image_points is None:
+            self.image_points = None
+        else:
+            ips = list(image_points)
+            if len(ips) != len(self.field_points):
+                raise ValueError(
+                    f"LGAberrationMerit: image_points length "
+                    f"{len(ips)} must match field_points length "
+                    f"{len(self.field_points)}")
+            self.image_points = [tuple(p) for p in ips]
+        self.w_s = float(w_s)
+        self.w_p = float(w_p)
+        self.w_o = None if w_o is None else float(w_o)
+        self.fit_kwargs = dict(fit_kwargs) if fit_kwargs else {}
+        self.weight = float(weight)
+        if name is not None:
+            self.name = str(name)
+
+    def evaluate(self, ctx) -> float:
+        # Lazy import to avoid bootstrap cycles.
+        from .asymptotic import (fit_canonical_polynomials,
+                                  aberration_tensor)
+        try:
+            fit = fit_canonical_polynomials(
+                ctx.prescription,
+                wavelength=ctx.wavelength,
+                **self.fit_kwargs,
+            )
+        except Exception:
+            # If the fit can't be built (e.g., aperture clipping kills
+            # too many rays for the current prescription), assign a
+            # large penalty so the optimiser steers away.
+            return 1e20
+
+        # The output modes are exactly the target keys, plus (0, 0)
+        # for piston (always useful diagnostically).
+        target_keys = list(self.targets.keys())
+        output_modes = list(set([(0, 0)] + target_keys))
+
+        total = 0.0
+        for ifp, src in enumerate(self.field_points):
+            if self.image_points is None:
+                # Use the nominal chief-ray landing computed from the
+                # paraxial back-map at v2_centre = 0.  fit's s2_centre/
+                # halfrange box is centered on the actual landing
+                # distribution, so s2_centre is a good chief estimate.
+                s2_img = (fit.s2x_centre, fit.s2y_centre)
+            else:
+                s2_img = self.image_points[ifp]
+            try:
+                tensor = aberration_tensor(
+                    fit,
+                    s2_image=s2_img,
+                    source_point=src,
+                    source_modes=[(0, 0)],
+                    pupil_modes=[(0, 0)],
+                    output_modes=output_modes,
+                    w_s=self.w_s, w_p=self.w_p, w_o=self.w_o,
+                )
+            except Exception:
+                return 1e20
+            # Index of each target in output_modes
+            idx_map = {m: i for i, m in enumerate(output_modes)}
+            for (p, ell), wgt in self.targets.items():
+                try:
+                    i = idx_map[(p, ell)]
+                except KeyError:
+                    continue
+                val = complex(tensor.L[i, 0])
+                total = total + wgt * (val.real * val.real
+                                       + val.imag * val.imag)
+
+        return self.weight * total
+
+
 class CompositeMerit(MeritTerm):
     """Combine multiple sub-merits into one weighted sum.
 

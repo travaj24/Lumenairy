@@ -3539,7 +3539,6 @@ def apply_real_lens_maslov(
 
     References
     ----------
-    Neurophos OPDGPU, ``docs/maslov_zemax_merit.tex``.
     Kravtsov & Orlov, *Caustics, Catastrophes and Wave Fields* (1999).
     Forbes & Alonso, JOSA A 15, 1341 (1998).
     """
