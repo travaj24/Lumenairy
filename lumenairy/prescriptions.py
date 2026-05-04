@@ -1779,3 +1779,269 @@ def load_codev_seq(filepath, name=None):
     if stop_index is not None:
         result['stop_index'] = stop_index
     return result
+
+
+# ============================================================================
+# Quadoa Optikos .qos (JSON) file I/O -- best-effort
+# ============================================================================
+#
+# Quadoa Optikos uses a JSON-based ``.qos`` system file.  The full schema
+# is not publicly documented at the level of every field, so the
+# exporter below writes a self-defined JSON layout that captures every
+# field a lumenairy prescription holds (surfaces, glasses, thicknesses,
+# aperture, conics, asphere coefficients, biconic Y-axis radii, stop
+# index, wavelength, name, units, semi-diameters).  Importer round-trips
+# this layout exactly.  When Quadoa publishes a stable schema -- or when
+# users supply a reference ``.qos`` -- this can be tightened.  The
+# JSON-writer side is intentionally schema-versioned so future readers
+# can detect the layout.
+# ============================================================================
+
+QUADOA_SCHEMA_VERSION = '1.0'
+
+
+def _quadoa_serialize_radius(R, scale):
+    if R is None or not np.isfinite(R):
+        return None
+    return float(R) * scale
+
+
+def _quadoa_serialize_aspheric(coeffs):
+    if coeffs is None:
+        return None
+    return [float(c) for c in coeffs]
+
+
+def export_quadoa_qos(prescription, path, wavelength=1.31e-6,
+                      stop_surface=0, aperture_diameter=None,
+                      back_focal_length=None, name=None, units='M'):
+    """Write a Quadoa Optikos-style ``.qos`` JSON system file.
+
+    Quadoa's native file format is JSON-based.  The official schema is
+    not fully publicly documented, so this writer emits a self-defined
+    JSON layout (schema version :data:`QUADOA_SCHEMA_VERSION`) that
+    captures every field a lumenairy prescription carries -- surfaces,
+    radii (incl. biconic Y), conics, asphere coefficients, glasses,
+    thicknesses, semi-diameters, aperture, stop index, wavelength,
+    and units.  :func:`load_quadoa_qos` reads this layout back losslessly.
+
+    .. warning::
+        Quadoa-readability of the produced file is **not yet verified**.
+        For pure round-tripping inside lumenairy this is exact; for
+        external interchange with Quadoa Optikos itself, validate
+        against a known-good reference ``.qos`` first.
+
+    Parameters
+    ----------
+    prescription : dict
+        Same format used by :func:`apply_real_lens`,
+        :func:`export_zemax_zmx`, and :func:`export_codev_seq`.
+    path : str
+        Output ``.qos`` file path.
+    wavelength : float
+        Reference wavelength [m].
+    stop_surface : int
+        Zero-based index of the stop among refracting surfaces.
+    aperture_diameter : float, optional
+        Entrance-pupil diameter [m]; falls back to
+        ``prescription['aperture_diameter']``.
+    back_focal_length : float, optional
+        BFL [m] from last surface to image plane.
+    name : str, optional
+        System name written into the JSON header.
+    units : {'M', 'MM', 'IN'}, default 'M'
+        Length units written in the header (file body is rescaled
+        on write to preserve the chosen unit).
+
+    See Also
+    --------
+    load_quadoa_qos
+    export_zemax_zmx, export_codev_seq
+    """
+    import json
+
+    surfaces = prescription['surfaces']
+    thicknesses = prescription['thicknesses']
+    if aperture_diameter is None:
+        aperture_diameter = prescription.get('aperture_diameter', 25.4e-3)
+    bfl = back_focal_length or 0.0
+
+    name = name or prescription.get('name',
+        os.path.splitext(os.path.basename(path))[0])
+
+    units = str(units).upper()
+    if units not in ('M', 'MM', 'IN'):
+        raise ValueError(
+            f"export_quadoa_qos: units must be M, MM, or IN (got {units!r})")
+    scale = {'M': 1.0, 'MM': 1e3, 'IN': 1.0 / 0.0254}[units]
+
+    surf_list = []
+    for i, surf in enumerate(surfaces):
+        t_m = thicknesses[i] if i < len(thicknesses) else bfl
+        sd = surf.get('semi_diameter')
+        entry = {
+            'index': i,
+            'radius': _quadoa_serialize_radius(
+                surf.get('radius'), scale),
+            'radius_y': _quadoa_serialize_radius(
+                surf.get('radius_y'), scale),
+            'conic': float(surf.get('conic', 0.0) or 0.0),
+            'conic_y': (None if surf.get('conic_y') is None
+                        else float(surf['conic_y'])),
+            'aspheric_coeffs': _quadoa_serialize_aspheric(
+                surf.get('aspheric_coeffs')),
+            'aspheric_coeffs_y': _quadoa_serialize_aspheric(
+                surf.get('aspheric_coeffs_y')),
+            'glass_before': surf.get('glass_before', 'air'),
+            'glass_after': surf.get('glass_after', 'air'),
+            'thickness': float(t_m) * scale,
+            'is_stop': bool(i == stop_surface),
+            'semi_diameter': (None if sd is None or not np.isfinite(sd)
+                              else float(sd) * scale),
+            'comment': surf.get('comment', ''),
+        }
+        surf_list.append(entry)
+
+    doc = {
+        'format': 'quadoa-optikos-system',
+        'schema_version': QUADOA_SCHEMA_VERSION,
+        'generated_by': 'lumenairy.export_quadoa_qos',
+        'name': name,
+        'units': units,
+        'wavelength_nm': float(wavelength) * 1e9,
+        'aperture_diameter': float(aperture_diameter) * scale,
+        'back_focal_length': float(bfl) * scale,
+        'stop_surface': int(stop_surface),
+        'surfaces': surf_list,
+    }
+
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(doc, f, indent=2)
+        f.write('\n')
+
+
+def load_quadoa_qos(filepath, name=None):
+    """Parse a Quadoa Optikos-style ``.qos`` JSON file into a
+    lumenairy prescription dict.
+
+    Round-trips losslessly with :func:`export_quadoa_qos` (schema
+    version :data:`QUADOA_SCHEMA_VERSION`).  If the file is missing
+    the ``format`` / ``schema_version`` header but otherwise looks
+    JSON-like with a ``surfaces`` array, the parser falls back to
+    a permissive read; unknown fields are preserved on each surface
+    under ``surf['_extras']`` so callers can inspect them without
+    losing information.
+
+    Parameters
+    ----------
+    filepath : str
+    name : str, optional
+        Override for the prescription name; defaults to the JSON
+        ``name`` field or the file stem.
+
+    Returns
+    -------
+    dict
+        Standard lumenairy prescription dict
+        (``{'name', 'aperture_diameter', 'surfaces', 'thicknesses',
+            'wavelength', 'stop_index', ...}``).
+
+    See Also
+    --------
+    export_quadoa_qos
+    """
+    import json
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        doc = json.load(f)
+
+    if not isinstance(doc, dict) or 'surfaces' not in doc:
+        raise ValueError(
+            f"load_quadoa_qos: {filepath!r} is not a recognisable "
+            f"Quadoa-style JSON system file (no 'surfaces' array).")
+
+    units = str(doc.get('units', 'M')).upper()
+    if units not in ('M', 'MM', 'IN'):
+        warnings.warn(
+            f"load_quadoa_qos: unknown units {units!r}, assuming meters",
+            UserWarning, stacklevel=2)
+        units = 'M'
+    inv_scale = {'M': 1.0, 'MM': 1e-3, 'IN': 0.0254}[units]
+
+    def _radius_in(v):
+        if v is None:
+            return float('inf')
+        return float(v) * inv_scale
+
+    raw = doc['surfaces']
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(
+            f"load_quadoa_qos: {filepath!r} has empty 'surfaces' list.")
+
+    surfaces = []
+    thicknesses = []
+    stop_index = None
+    semi_diameters = []
+    known_keys = {
+        'index', 'radius', 'radius_y', 'conic', 'conic_y',
+        'aspheric_coeffs', 'aspheric_coeffs_y',
+        'glass_before', 'glass_after',
+        'thickness', 'is_stop', 'semi_diameter', 'comment',
+    }
+    for i, s in enumerate(raw):
+        if not isinstance(s, dict):
+            raise ValueError(
+                f"load_quadoa_qos: surface {i} is not a JSON object.")
+        sd = s.get('semi_diameter')
+        surf = {
+            'radius': _radius_in(s.get('radius')),
+            'conic': float(s.get('conic', 0.0) or 0.0),
+            'aspheric_coeffs': (None if s.get('aspheric_coeffs') is None
+                                else list(s['aspheric_coeffs'])),
+            'radius_y': (None if s.get('radius_y') is None
+                         else _radius_in(s['radius_y'])),
+            'conic_y': (None if s.get('conic_y') is None
+                        else float(s['conic_y'])),
+            'aspheric_coeffs_y': (None if s.get('aspheric_coeffs_y') is None
+                                  else list(s['aspheric_coeffs_y'])),
+            'glass_before': s.get('glass_before', 'air'),
+            'glass_after': s.get('glass_after', 'air'),
+        }
+        if sd is not None:
+            surf['semi_diameter'] = float(sd) * inv_scale
+            semi_diameters.append(surf['semi_diameter'])
+        if s.get('comment'):
+            surf['comment'] = s['comment']
+        extras = {k: v for k, v in s.items() if k not in known_keys}
+        if extras:
+            surf['_extras'] = extras
+        surfaces.append(surf)
+        if i < len(raw) - 1:
+            thicknesses.append(float(s.get('thickness', 0.0)) * inv_scale)
+        if s.get('is_stop'):
+            stop_index = i
+
+    aperture_diameter = doc.get('aperture_diameter')
+    aperture_m = (
+        25.4e-3 if aperture_diameter is None
+        else float(aperture_diameter) * inv_scale)
+
+    result = {
+        'name': name or doc.get('name')
+            or os.path.splitext(os.path.basename(filepath))[0],
+        'aperture_diameter': aperture_m,
+        'surfaces': surfaces,
+        'thicknesses': thicknesses,
+    }
+    if 'wavelength_nm' in doc:
+        result['wavelength'] = float(doc['wavelength_nm']) * 1e-9
+    if stop_index is None and 'stop_surface' in doc:
+        try:
+            stop_index = int(doc['stop_surface'])
+        except (TypeError, ValueError):
+            stop_index = None
+    if stop_index is not None:
+        result['stop_index'] = stop_index
+    if semi_diameters:
+        result['has_semi_diameters'] = True
+    return result

@@ -2,6 +2,65 @@
 
 All notable changes to the core library are documented here.
 
+## [3.3.1] — 2026-05-02
+
+### Feature — Pre-flight grid vs prescription-aperture check
+
+`apply_real_lens`, `apply_real_lens_traced`, and `apply_real_lens_maslov`
+now run a one-shot check at entry that compares each surface's
+`semi_diameter` against the simulation grid's half-extent (`N*dx/2`)
+and emits a `UserWarning` if any surface exceeds the grid.
+
+This is the silent-energy-loss case where the lens itself would have
+transmitted energy past `N*dx/2` but the simulation grid's hard
+boundary clips it.  It manifests downstream as a uniform inward
+centroid bias and missing power, and is otherwise difficult to
+distinguish from real aberration.  The warning lists the offending
+surfaces with their semi-diameters and the largest gap, and points
+the user to either grow `N` or coarsen `dx`.
+
+**New public API:**
+
+- **`check_grid_vs_apertures(prescription, N, dx, *, safety_factor=1.0)`**.
+  Returns a list of `(label, semi_aperture_m, grid_semi_m, gap_m)`
+  for every prescription surface whose `semi_diameter` exceeds
+  `safety_factor * N * dx / 2`.  Empty list means the grid is wide
+  enough.  Pass `safety_factor=0.95` to flag surfaces that come
+  within 5% of the grid edge (recommended for clean Gaussian-wing
+  containment).
+
+The warning fires once per call site (Python's default warning
+filter dedups by source line), so heavy multi-element systems do
+not get spammed.
+
+### Feature — Quadoa Optikos `.qos` import/export (best-effort)
+
+`export_quadoa_qos` / `load_quadoa_qos` add round-trip support for a
+Quadoa-Optikos-style JSON system file.  Quadoa's official schema is
+not fully publicly documented, so this writer emits a self-defined
+JSON layout (schema version `QUADOA_SCHEMA_VERSION = '1.0'`) that
+captures every field a lumenairy prescription holds:
+
+- per-surface radii (incl. biconic `radius_y`),
+- conics (incl. `conic_y`),
+- aspheric coefficients (incl. per-Y axis),
+- glasses on both sides of the surface,
+- thicknesses, semi-diameters, comments,
+- aperture diameter, stop index, wavelength, and units.
+
+Round-trips losslessly inside lumenairy.  External Quadoa
+readability is **not yet verified** — for verified interchange,
+validate against a known-good reference `.qos`; the docstring
+calls this out explicitly.
+
+The library now has full I/O support for Zemax (`.zmx`, `.txt`),
+Code V (`.seq`), and Quadoa Optikos (`.qos`).
+
+Validation: 4 new tests in `validation/test_io.py` covering doublet
+round-trip, `units='MM'` round-trip, asphere coefficients +
+semi_diameter + biconic Y round-trip, and a sanity check that a
+round-tripped prescription drives `apply_real_lens` without error.
+
 ## [3.3.0] — 2026-05-03
 
 ### Feature — Phase-space asymptotic propagator and Laguerre-Gaussian aberration tensor

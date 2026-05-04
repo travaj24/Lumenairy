@@ -72,6 +72,7 @@ from .lenses import (
     apply_cylindrical_lens,
     apply_grin_lens,
     apply_axicon,
+    check_grid_vs_apertures,
 )
 from .lenses import apply_real_lens_maslov
 
@@ -336,6 +337,9 @@ from .prescriptions import (
     export_zemax_zmx,
     load_codev_seq,
     export_codev_seq,
+    export_quadoa_qos,
+    load_quadoa_qos,
+    QUADOA_SCHEMA_VERSION,
     THORLABS_CATALOG,
 )
 
@@ -452,7 +456,7 @@ from .plotting import (
     compute_jones_pupil,
 )
 
-__version__ = "3.3.0"
+__version__ = "3.3.1"
 
 __all__ = [
     # Propagation
@@ -483,6 +487,7 @@ __all__ = [
     'apply_cylindrical_lens',
     'apply_grin_lens',
     'apply_axicon',
+    'check_grid_vs_apertures',
     # Glass
     'get_glass_index',
     'get_glass_index_complex',
@@ -713,6 +718,9 @@ __all__ = [
     'export_zemax_zmx',
     'load_codev_seq',
     'export_codev_seq',
+    'export_quadoa_qos',
+    'load_quadoa_qos',
+    'QUADOA_SCHEMA_VERSION',
     'make_singlet',
     'make_doublet',
     'thorlabs_lens',

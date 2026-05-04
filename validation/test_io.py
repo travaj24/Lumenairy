@@ -302,6 +302,105 @@ H.run('CODE V .seq: stop_surface=2 round-trip',
 
 
 # ---------------------------------------------------------------------
+H.section('Quadoa Optikos .qos import/export')
+
+
+def t_quadoa_qos_doublet_roundtrip():
+    pres = op.make_doublet(R1=50e-3, R2=-30e-3, R3=-80e-3,
+                           d1=4e-3, d2=2e-3,
+                           glass1='N-BK7', glass2='N-SF6HT',
+                           aperture=10e-3)
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, 'doublet.qos')
+        op.export_quadoa_qos(pres, p, wavelength=1.31e-6, stop_surface=0)
+        loaded = op.load_quadoa_qos(p)
+    same_n = len(loaded['surfaces']) == len(pres['surfaces'])
+    same_t = (len(loaded['thicknesses']) == len(pres['thicknesses'])
+              and all(abs(a - b) < 1e-12 for a, b in
+                      zip(loaded['thicknesses'], pres['thicknesses'])))
+    same_R = all(abs(a['radius'] - b['radius']) < 1e-12
+                 for a, b in zip(pres['surfaces'], loaded['surfaces']))
+    same_g = all(a['glass_after'].lower() == b['glass_after'].lower()
+                 for a, b in zip(pres['surfaces'], loaded['surfaces']))
+    return (same_n and same_t and same_R and same_g
+            and loaded.get('stop_index') == 0), \
+        (f'{len(loaded["surfaces"])} surfaces, '
+         f'stop={loaded.get("stop_index")}')
+
+
+H.run('Quadoa .qos: doublet round-trip', t_quadoa_qos_doublet_roundtrip)
+
+
+def t_quadoa_qos_units_mm():
+    pres = op.make_singlet(50e-3, -50e-3, 3e-3, 'N-BK7', aperture=25.4e-3)
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, 'singlet.qos')
+        op.export_quadoa_qos(pres, p, wavelength=1.31e-6, units='MM')
+        with open(p) as f:
+            txt = f.read()
+        loaded = op.load_quadoa_qos(p)
+    ok = ('"units": "MM"' in txt
+          and abs(loaded['surfaces'][0]['radius'] - 50e-3) < 1e-12
+          and abs(loaded['thicknesses'][0] - 3e-3) < 1e-12
+          and abs(loaded['aperture_diameter'] - 25.4e-3) < 1e-12)
+    return ok, 'mm units preserved through round-trip'
+
+
+H.run('Quadoa .qos: units=MM round-trip', t_quadoa_qos_units_mm)
+
+
+def t_quadoa_qos_aspheric_and_semi_diameters():
+    """Aspheric coeffs, semi_diameter, and biconic radius_y all
+    round-trip through .qos JSON.
+    """
+    pres = op.make_singlet(50e-3, -30e-3, 3e-3, 'N-BK7', aperture=10e-3)
+    pres['surfaces'][0]['conic'] = -0.5
+    pres['surfaces'][0]['aspheric_coeffs'] = [0.0, 1e-6, -2e-9, 3e-12]
+    pres['surfaces'][0]['semi_diameter'] = 5.5e-3
+    pres['surfaces'][1]['radius_y'] = -30.5e-3
+    pres['surfaces'][1]['conic_y'] = 0.1
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, 'asph.qos')
+        op.export_quadoa_qos(pres, p, wavelength=1.31e-6)
+        loaded = op.load_quadoa_qos(p)
+    s0 = loaded['surfaces'][0]
+    s1 = loaded['surfaces'][1]
+    ok = (abs(s0['conic'] - (-0.5)) < 1e-12
+          and s0['aspheric_coeffs'] is not None
+          and len(s0['aspheric_coeffs']) == 4
+          and abs(s0['aspheric_coeffs'][2] - (-2e-9)) < 1e-18
+          and abs(s0.get('semi_diameter', 0.0) - 5.5e-3) < 1e-12
+          and abs(s1['radius_y'] - (-30.5e-3)) < 1e-12
+          and abs(s1['conic_y'] - 0.1) < 1e-12)
+    return ok, ('asph_coeffs + biconic Y + semi_diameter '
+                'round-trip lossless')
+
+
+H.run('Quadoa .qos: asphere coeffs / semi_d / biconic round-trip',
+      t_quadoa_qos_aspheric_and_semi_diameters)
+
+
+def t_quadoa_qos_apply_real_lens_works():
+    """A round-tripped Quadoa prescription drives apply_real_lens
+    without errors and yields a finite, non-zero output.
+    """
+    pres = op.make_singlet(50e-3, -50e-3, 3e-3, 'N-BK7', aperture=8e-3)
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, 'singlet.qos')
+        op.export_quadoa_qos(pres, p, wavelength=1.31e-6)
+        loaded = op.load_quadoa_qos(p)
+    N, dx, lam = 256, 8e-6, 1.31e-6
+    E = np.ones((N, N), dtype=np.complex128)
+    E_out = op.apply_real_lens(E, loaded, lam, dx)
+    ok = np.all(np.isfinite(E_out)) and np.abs(E_out).max() > 0
+    return ok, f'peak={np.abs(E_out).max():.3e}'
+
+
+H.run('Quadoa .qos: round-tripped prescription drives apply_real_lens',
+      t_quadoa_qos_apply_real_lens_works)
+
+
+# ---------------------------------------------------------------------
 H.section('User library')
 
 

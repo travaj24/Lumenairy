@@ -19,6 +19,8 @@ currently runs on the CPU only.
 Author: Andrew Traverso
 """
 
+import warnings
+
 import numpy as np
 
 # GPU backend ----------------------------------------------------------------
@@ -687,6 +689,149 @@ def apply_aspheric_lens(E_in, R1, R2, d, n_lens, wavelength, dx, dy=None,
 
 
 # ---------------------------------------------------------------------------
+# Grid-vs-aperture safety check
+# ---------------------------------------------------------------------------
+
+def _collect_semi_diameters(prescription):
+    """Return [(label, semi_diameter_m)] for every surface in the
+    prescription that has a ``semi_diameter`` set.
+
+    Looks at both ``prescription['elements']`` (Zemax-loaded path,
+    where ``semi_diameter`` is the per-surface CLAP) and
+    ``prescription['surfaces']`` (builder-style).  The top-level
+    ``aperture_diameter`` (system-wide clear aperture) is also
+    included if present.  Surfaces without a finite ``semi_diameter``
+    are skipped.
+    """
+    out = []
+    seen_labels = set()
+    elements = prescription.get('elements')
+    if isinstance(elements, list):
+        for elem in elements:
+            if not isinstance(elem, dict):
+                continue
+            sd = elem.get('semi_diameter')
+            if sd is None or not np.isfinite(float(sd)):
+                continue
+            surf_num = elem.get('surf_num', '?')
+            comment = (elem.get('comment') or elem.get('name') or '').strip()
+            label = f"surf {surf_num}"
+            if comment:
+                label = f"{label} '{comment}'"
+            if label not in seen_labels:
+                out.append((label, float(sd)))
+                seen_labels.add(label)
+    surfaces = prescription.get('surfaces')
+    if isinstance(surfaces, list):
+        for i, surf in enumerate(surfaces):
+            if not isinstance(surf, dict):
+                continue
+            sd = surf.get('semi_diameter')
+            if sd is None or not np.isfinite(float(sd)):
+                continue
+            label = f"surfaces[{i}]"
+            if label not in seen_labels:
+                out.append((label, float(sd)))
+                seen_labels.add(label)
+    ap = prescription.get('aperture_diameter')
+    if ap is not None and np.isfinite(float(ap)):
+        out.append(('system aperture_diameter', 0.5 * float(ap)))
+    return out
+
+
+def check_grid_vs_apertures(prescription, N, dx, *, safety_factor=1.0):
+    """Identify every prescription surface whose semi-aperture exceeds
+    the simulation grid's half-extent.
+
+    Use this as a pre-flight check before a full ASM-through-lens run.
+    A surface whose ``semi_diameter`` is larger than ``safety_factor *
+    N * dx / 2`` will silently truncate the field's outer rim during
+    propagation, dropping any energy the real hardware would have
+    transmitted past the grid edge.  This is a sim-infrastructure
+    artifact, not a physical clipping by the lens itself, and will
+    show up in centroid measurements as a uniform inward bias.
+
+    Parameters
+    ----------
+    prescription : dict
+        lumenairy prescription dict (loaded or builder-built).
+    N : int
+        Simulation grid size (assumed square).
+    dx : float
+        Grid pitch [m].
+    safety_factor : float, optional
+        Margin between the grid semi and the largest surface
+        semi-aperture.  Pass 0.95 to flag surfaces whose semi exceeds
+        95% of the grid half-extent (recommended for clean Gaussian
+        wing containment); pass 1.0 (default) to flag only surfaces
+        that exceed the grid outright.
+
+    Returns
+    -------
+    issues : list of (label, semi_aperture_m, grid_semi_m, gap_m)
+        One tuple per offending surface.  Empty if every aperture fits.
+
+    See Also
+    --------
+    apply_real_lens, apply_real_lens_traced, apply_real_lens_maslov
+        These functions automatically run this check on entry and emit
+        a UserWarning if any aperture exceeds the grid.
+    """
+    if N <= 0 or dx <= 0:
+        raise ValueError(f"N and dx must be positive, got N={N}, dx={dx}")
+    grid_semi = 0.5 * float(N) * float(dx)
+    threshold = float(safety_factor) * grid_semi
+    issues = []
+    for label, sd in _collect_semi_diameters(prescription):
+        if sd > threshold:
+            issues.append((label, sd, grid_semi, sd - grid_semi))
+    return issues
+
+
+def _warn_if_aperture_exceeds_grid(prescription, N, dx, *,
+                                    source='apply_real_lens',
+                                    safety_factor=1.0,
+                                    stacklevel=3):
+    """Emit a UserWarning if any prescription aperture exceeds the
+    simulation grid.  Called at the top of ``apply_real_lens``,
+    ``apply_real_lens_traced``, and ``apply_real_lens_maslov``.
+
+    Python's default warning filter dedups by ``(module, lineno)`` so
+    repeated calls from the same site only warn once.
+    """
+    try:
+        issues = check_grid_vs_apertures(
+            prescription, N, dx, safety_factor=safety_factor)
+    except Exception:
+        return
+    if not issues:
+        return
+    grid_semi = 0.5 * N * dx
+    issues_sorted = sorted(issues, key=lambda r: -r[1])
+    biggest_label, biggest_sd, _, biggest_gap = issues_sorted[0]
+    body = ", ".join(
+        f"{lab}={sd*1e3:.2f}mm"
+        for lab, sd, _, _ in issues_sorted[:5]
+    )
+    if len(issues_sorted) > 5:
+        body = body + f", ... (+{len(issues_sorted)-5} more)"
+    msg = (
+        f"{source}: {len(issues)} prescription aperture(s) exceed the "
+        f"simulation grid (N={N}, dx={dx*1e6:.3f} um, "
+        f"semi={grid_semi*1e3:.3f} mm). "
+        f"Largest is {biggest_label} with semi_diameter="
+        f"{biggest_sd*1e3:.3f} mm "
+        f"({biggest_gap*1e3:+.3f} mm beyond the grid); the field will "
+        f"be truncated at the grid edge during propagation, "
+        f"silently dropping energy the real lens would have "
+        f"transmitted. Consider increasing N or dx so "
+        f"N*dx/2 >= max(semi_diameter). "
+        f"Affected surfaces: {body}."
+    )
+    warnings.warn(msg, UserWarning, stacklevel=stacklevel)
+
+
+# ---------------------------------------------------------------------------
 # Multi-surface real lens (split-step refraction + ASM in glass)
 # ---------------------------------------------------------------------------
 
@@ -856,6 +1001,18 @@ def apply_real_lens(E_in, lens_prescription, wavelength, dx,
     -> device.  Mixed-dtype callers (e.g. a complex64 host array
     promoted to the device) remain in their starting precision.
     """
+    # Pre-flight grid vs prescription-aperture check.  If any surface's
+    # semi-aperture exceeds the simulation grid, ASM will silently
+    # truncate the field at the grid edge and lose energy that the real
+    # hardware would have transmitted.  Issue a UserWarning once per
+    # call site (Python's default warning filter dedups by source line).
+    try:
+        N_grid = int(np.shape(E_in)[0])
+        _warn_if_aperture_exceeds_grid(
+            lens_prescription, N_grid, dx, source='apply_real_lens')
+    except Exception:
+        pass
+
     # Select the array namespace: numpy by default; cupy if the caller
     # opted in via ``use_gpu=True`` OR passed in a cupy array.
     if use_gpu or _is_cupy_array(E_in):
@@ -2211,6 +2368,14 @@ def apply_real_lens_traced(E_in, lens_prescription, wavelength, dx,
 
     call_progress(progress, 'real_lens_traced', 0.0, 'initialising')
 
+    # Pre-flight grid vs prescription-aperture check.
+    try:
+        _warn_if_aperture_exceeds_grid(
+            lens_prescription, int(np.shape(E_in)[0]), dx,
+            source='apply_real_lens_traced')
+    except Exception:
+        pass
+
     Ny, Nx = E_in.shape
     if Ny != Nx:
         raise ValueError("apply_real_lens_traced requires a square grid")
@@ -3548,6 +3713,13 @@ def apply_real_lens_maslov(
         raise ValueError(
             f"E_in must be square 2D, got shape {E_in.shape}")
     N = E_in.shape[0]
+
+    # Pre-flight grid vs prescription-aperture check.
+    try:
+        _warn_if_aperture_exceeds_grid(
+            lens_prescription, N, dx, source='apply_real_lens_maslov')
+    except Exception:
+        pass
 
     def _progress(phase, frac, note=''):
         if progress is not None:

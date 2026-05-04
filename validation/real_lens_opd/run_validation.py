@@ -407,6 +407,78 @@ def plot_case(result, out_path):
 
 
 # =========================================================================
+# Per-case OPD curve dump (universal CSV for downstream analysis)
+# =========================================================================
+
+def write_per_case_opd_csv(result, out_dir):
+    """Write the four OPD curves + raw and (piston+tilt+defocus)-removed
+    residuals for one case as a tabular CSV.
+
+    Columns:
+      x_mm
+        pupil-plane x coordinate, in millimetres.
+      opl_{paraxial,slant,traced,geom}_nm
+        absolute OPL at each x, in nanometres.  ``geom`` is the
+        sequential-ray-tracer ground truth interpolated onto the wave
+        grid; the other three are wave OPDs from apply_real_lens
+        (paraxial, slant) and apply_real_lens_traced.
+      residual_raw_{paraxial,slant,traced}_nm
+        opl_method - opl_geom, no mode removal.  This is the
+        physically-meaningful "wave-vs-truth" residual; the full
+        defocus-bias offset is still in here.
+      residual_pt+focus_{paraxial,slant,traced}_nm
+        same residual after removing the best-fit piston, tilt, and
+        defocus -- the "image-quality OPD" used in report.md's
+        physics-check column.
+
+    NaN rows are written as empty cells so spreadsheet importers
+    handle them gracefully.
+
+    File size: ~1-3 MB per case (21 cases * average ~1.5 MB =
+    ~30 MB total committed to the repo, sized to be human-browsable
+    rather than maximally compact).  Use NPZ if you need a smaller /
+    Python-only format.
+    """
+    case = result['case']
+    name = case['name']
+    csv_path = os.path.join(out_dir, f'{name}_opd.csv')
+
+    x_mm = result['x_wave'] * 1e3
+
+    cols = {
+        'x_mm':                  x_mm,
+        'opl_paraxial_nm':       result['opl_par'] * 1e9,
+        'opl_slant_nm':          result['opl_slant'] * 1e9,
+        'opl_traced_nm':         result['opl_traced'] * 1e9,
+        'opl_geom_nm':           result['opl_geom_on_wave'] * 1e9,
+        'residual_raw_paraxial_nm': result['residuals_nm']['paraxial'],
+        'residual_raw_slant_nm':    result['residuals_nm']['slant'],
+        'residual_raw_traced_nm':   result['residuals_nm']['ray-traced'],
+    }
+    ptf = result['summaries']['piston+tilt+defocus']
+    cols['residual_pt+focus_paraxial_nm'] = ptf['paraxial']['residual']
+    cols['residual_pt+focus_slant_nm']    = ptf['slant']['residual']
+    cols['residual_pt+focus_traced_nm']   = ptf['ray-traced']['residual']
+
+    keys = list(cols.keys())
+    n_rows = len(x_mm)
+
+    def _fmt(v):
+        # Empty cell for NaN -- universally readable across spreadsheets,
+        # and unambiguous in CSV (vs. the literal string "nan" which
+        # MATLAB and Excel handle inconsistently).
+        if not np.isfinite(v):
+            return ''
+        return f'{v:+.6e}'
+
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(keys)
+        for i in range(n_rows):
+            w.writerow([_fmt(cols[k][i]) for k in keys])
+
+
+# =========================================================================
 # Report writers
 # =========================================================================
 
@@ -589,6 +661,18 @@ def main():
         png_path = os.path.join(RESULTS_DIR, f"{case['name']}.png")
         plot_case(r, png_path)
         print(f"    saved {png_path}")
+
+        # Dump the per-pupil-x OPD curves and residuals as CSV.
+        # This is the data behind the PNG -- people who want to
+        # do their own residual-fitting / pull data into Excel or
+        # MATLAB or pandas can read this without any Python /
+        # NumPy dependency.
+        try:
+            write_per_case_opd_csv(r, RESULTS_DIR)
+            print(f"    OPD CSV: "
+                  f"{os.path.join(RESULTS_DIR, case['name'] + '_opd.csv')}")
+        except Exception as e:
+            print(f"    OPD CSV failed: {type(e).__name__}: {e}")
 
         # Emit matching Zemax prescriptions so the same test can be
         # cross-checked in OpticStudio.  One human-readable LDE table

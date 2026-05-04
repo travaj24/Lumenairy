@@ -10,6 +10,34 @@ manipulation using the Angular Spectrum Method (ASM) and related techniques.
 
 **Author:** Andrew Traverso
 
+## What's new in 3.3.1
+
+- **Pre-flight grid-vs-aperture check** — `apply_real_lens`,
+  `apply_real_lens_traced`, and `apply_real_lens_maslov` now
+  inspect every surface's `semi_diameter` against the simulation
+  grid's half-extent (`N*dx/2`) and emit a `UserWarning` if any
+  surface exceeds the grid.  This catches the silent-energy-loss
+  case where the lens itself would have transmitted past the
+  grid edge but the simulation truncates at `N*dx/2`, which
+  otherwise manifests downstream as a uniform inward centroid
+  bias and missing power.  A new public helper
+  `check_grid_vs_apertures(prescription, N, dx,
+  safety_factor=1.0)` returns the offending surfaces explicitly
+  for use in pre-flight scripts.  Warning fires once per call
+  site (Python's default warning filter dedups by source line).
+
+- **Quadoa Optikos `.qos` import/export (best-effort)** —
+  `export_quadoa_qos` / `load_quadoa_qos` add round-trip support
+  for a Quadoa-Optikos-style JSON system file.  The schema
+  (version `QUADOA_SCHEMA_VERSION = '1.0'`) captures every field
+  a lumenairy prescription holds — radii (incl. biconic Y),
+  conics, asphere coefficients (per axis), glasses, thicknesses,
+  semi-diameters, aperture, stop index, wavelength, units.
+  Round-trips lossless inside lumenairy; external Quadoa
+  readability is unverified pending a reference `.qos`.  The
+  library now has full prescription I/O for Zemax (`.zmx`,
+  `.txt`), Code V (`.seq`), and Quadoa Optikos (`.qos`).
+
 ## What's new in 3.3.0
 
 A new module **`lumenairy.asymptotic`** implementing the closed-form

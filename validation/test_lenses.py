@@ -618,6 +618,59 @@ H.run('apply_real_lens_traced: finite, positive output',
       t_apply_real_lens_traced_intensity_finite)
 
 
+def t_check_grid_vs_apertures_flags_oversized():
+    """`check_grid_vs_apertures` returns the offending surface when its
+    semi_diameter exceeds the simulation grid's half-extent."""
+    pres = op.make_singlet(50e-3, np.inf, 4e-3, 'N-BK7', aperture=12e-3)
+    N, dx = 256, 8e-6   # grid semi = 1.024 mm, lens semi = 6 mm
+    issues = op.check_grid_vs_apertures(pres, N, dx)
+    grid_semi = 0.5 * N * dx
+    have_issue = len(issues) >= 1
+    if have_issue:
+        label, sd, gs, gap = issues[0]
+        ok = sd > grid_semi and gap > 0 and abs(gs - grid_semi) < 1e-12
+    else:
+        ok = False
+    return ok, f'issues={len(issues)}, grid_semi={grid_semi*1e3:.3f}mm'
+
+
+H.run('Grid-vs-aperture check: flags oversized aperture',
+      t_check_grid_vs_apertures_flags_oversized)
+
+
+def t_check_grid_vs_apertures_silent_when_ok():
+    """`check_grid_vs_apertures` returns an empty list when every
+    surface fits inside the grid."""
+    pres = op.make_singlet(50e-3, np.inf, 4e-3, 'N-BK7', aperture=2e-3)
+    N, dx = 1024, 8e-6   # grid semi = 4.096 mm, lens semi = 1 mm
+    issues = op.check_grid_vs_apertures(pres, N, dx)
+    return len(issues) == 0, f'issues={len(issues)}'
+
+
+H.run('Grid-vs-aperture check: silent when grid is wide enough',
+      t_check_grid_vs_apertures_silent_when_ok)
+
+
+def t_apply_real_lens_warns_when_aperture_exceeds_grid():
+    """`apply_real_lens` emits a UserWarning when the prescription's
+    aperture is wider than the simulation grid."""
+    import warnings as _warnings
+    pres = op.make_singlet(50e-3, np.inf, 4e-3, 'N-BK7', aperture=12e-3)
+    N, dx, lam = 64, 8e-6, 1.31e-6     # grid semi = 0.256 mm, lens = 6 mm
+    E = np.ones((N, N), dtype=np.complex128)
+    with _warnings.catch_warnings(record=True) as w:
+        _warnings.simplefilter('always')
+        op.apply_real_lens(E, pres, lam, dx)
+    fired = any(issubclass(rec.category, UserWarning)
+                and 'exceed' in str(rec.message).lower()
+                for rec in w)
+    return fired, f'captured {len(w)} warnings, fired={fired}'
+
+
+H.run('apply_real_lens: warns when aperture > grid',
+      t_apply_real_lens_warns_when_aperture_exceeds_grid)
+
+
 def t_axicon_makes_bessel_intensity_pattern():
     """An axicon focused over its depth-of-focus produces an on-axis
     bright line; intensity at a non-zero z stays > 0."""
