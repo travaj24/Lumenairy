@@ -719,5 +719,86 @@ H.run('DOE: free-space transverse shift = distance * direction-cosine',
       t_doe_phase_traced_freespace_shift)
 
 
+# ---------------------------------------------------------------------
+H.section('trace() embedded grating diffraction (surface_diffraction kwarg)')
+
+
+def t_trace_diff_kick_matches_apply_doe():
+    """Per-surface diffraction in trace() reproduces the angular kick
+    from apply_doe_phase_traced exactly."""
+    pres = op.make_singlet(50e-3, -50e-3, 3e-3, 'N-BK7', aperture=10e-3)
+    surfs = surfaces_from_prescription(pres)
+    lam = 1.31e-6
+    period = 100e-6
+    bundle = _make_bundle(x=np.zeros(1), y=np.zeros(1),
+                          L=np.zeros(1), M=np.zeros(1),
+                          wavelength=lam)
+    bundle.z = np.array([-50e-3])
+    res_no = trace(bundle, surfs, lam, output_filter='last')
+    res_di = trace(bundle, surfs, lam, output_filter='last',
+                    surface_diffraction={1: (1, 0, period, period)})
+    dL = float(res_di.image_rays.L[0]) - float(res_no.image_rays.L[0])
+    expected = lam / period
+    return abs(dL - expected) < 1e-9, \
+        f'dL={dL:.6e}, expected={expected:.6e}'
+
+
+H.run('trace + surface_diffraction: angular kick == m*lam/period',
+      t_trace_diff_kick_matches_apply_doe)
+
+
+def t_trace_diff_opl_includes_grating_phase():
+    """The DOE OPL contribution m*lambda*x/period IS added to the OPL
+    accumulator (this is the 'constant phase shift' that
+    apply_doe_phase_traced docstring says callers must add manually --
+    trace's surface_diffraction does it automatically)."""
+    pres = op.make_singlet(50e-3, -50e-3, 3e-3, 'N-BK7', aperture=10e-3)
+    surfs = surfaces_from_prescription(pres)
+    lam = 1.31e-6
+    period = 100e-6
+    bundle = _make_bundle(x=np.array([2e-3]), y=np.array([0.0]),
+                          L=np.zeros(1), M=np.zeros(1), wavelength=lam)
+    bundle.z = np.array([-50e-3])
+    res_no = trace(bundle, surfs, lam, output_filter='last')
+    res_di = trace(bundle, surfs, lam, output_filter='last',
+                    surface_diffraction={1: (1, 0, period, period)})
+    dOPL = float(res_di.image_rays.opd[0]) - float(res_no.image_rays.opd[0])
+    # Expect: dOPL ~ m*lambda/period * x_at_DOE.
+    # x_at_DOE for ray launched at x=2 mm through 3 mm of BK7 with no
+    # initial angle is approximately 2 mm minus a small refraction
+    # shift; we just check magnitude is in the right ballpark.
+    expected = (lam / period) * 2e-3
+    rel_err = abs(dOPL - expected) / abs(expected)
+    return rel_err < 0.05, \
+        f'dOPL={dOPL*1e6:.3f} um, expected ~{expected*1e6:.3f} um, ' \
+        f'rel_err={rel_err*100:.2f}%'
+
+
+H.run('trace + surface_diffraction: OPL includes m*lam*x/period',
+      t_trace_diff_opl_includes_grating_phase)
+
+
+def t_trace_diff_evanescent_flagging():
+    """Diffraction order whose grating equation produces L^2+M^2>1 is
+    evanescent and the ray gets flagged alive=False."""
+    pres = op.make_singlet(50e-3, np.inf, 1e-3, 'N-BK7', aperture=10e-3)
+    surfs = surfaces_from_prescription(pres)
+    lam = 1.31e-6
+    period = 1.0e-6   # period < lambda forces large-angle
+    bundle = _make_bundle(x=np.zeros(1), y=np.zeros(1),
+                          L=np.zeros(1), M=np.zeros(1), wavelength=lam)
+    bundle.z = np.array([-10e-3])
+    res = trace(bundle, surfs, lam, output_filter='last',
+                surface_diffraction={1: (5, 0, period, period)})
+    alive = bool(res.image_rays.alive[0])
+    ec = int(res.image_rays.error_code[0]) if res.image_rays.error_code is not None else -1
+    return (not alive) and ec == int(RAY_EVANESCENT), \
+        f'alive={alive}, error_code={ec} (expected RAY_EVANESCENT={int(RAY_EVANESCENT)})'
+
+
+H.run('trace + surface_diffraction: evanescent orders flagged',
+      t_trace_diff_evanescent_flagging)
+
+
 if __name__ == '__main__':
     sys.exit(H.summary())

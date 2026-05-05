@@ -670,6 +670,7 @@ def fit_canonical_polynomials(
     poly_order: int = 6,
     extract_linear_phase: bool = True,
     object_distance: Optional[float] = None,
+    surface_diffraction: Optional[Dict[int, Tuple[float, float, float, float]]] = None,
 ) -> CanonicalPolyFit:
     """Fit Chebyshev tensor-product polynomials to ``Phi(s2, v2)`` and
     ``s1(s2, v2)`` over a 4-D source x pupil grid (paper 1, Section 3).
@@ -718,6 +719,19 @@ def fit_canonical_polynomials(
     object_distance : float, optional
         Source-plane to first-surface distance [m].  Defaults to
         ``prescription.get('object_distance', 0.0)``.
+    surface_diffraction : dict, optional
+        Per-surface diffractive-order kicks for DOE / grating elements
+        embedded in the prescription.  Maps surface index to
+        ``(order_x, order_y, period_x, period_y)``.  Each ray's
+        direction cosines are shifted by ``m * lambda / Lambda`` after
+        refraction at that surface, evanescent orders are flagged
+        ``alive=False``.  Use this to pin the LG fit to a single
+        diffraction order of a Dammann splitter or any thin grating in
+        a sequential prescription -- the resulting fit's chief-ray
+        landings span the chosen order's image-plane footprint, so
+        :func:`aberration_tensor` evaluations at that order's frame
+        centres reflect the true diffractive wavefront.  See also
+        :func:`lumenairy.raytrace.apply_doe_phase_traced`.
 
     Returns
     -------
@@ -789,7 +803,8 @@ def fit_canonical_polynomials(
     )
     bundle.z = np.full(n_rays, -object_distance, dtype=np.float64)
 
-    res = trace(bundle, surfaces, wavelength, output_filter='last')
+    res = trace(bundle, surfaces, wavelength, output_filter='last',
+                surface_diffraction=surface_diffraction)
     final = res.image_rays
     alive = np.asarray(final.alive, dtype=bool)
     n_alive = int(alive.sum())

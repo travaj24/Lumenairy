@@ -2,6 +2,47 @@
 
 All notable changes to the core library are documented here.
 
+## [3.3.2] — 2026-05-04
+
+### Feature — Embedded grating diffraction in `trace()` and `fit_canonical_polynomials`
+
+`trace()` and `fit_canonical_polynomials` gain a new `surface_diffraction`
+keyword argument that pins a chosen DOE / grating order at a specific
+surface inside the prescription.  This unblocks LG-aberration-tensor
+analysis (and the asymptotic propagator) at non-zero diffraction
+orders -- previously, geometric tracing only saw the (0, 0) order
+because `apply_doe_phase_traced` operates on standalone `RayBundle`
+objects, not surfaces in a sequential prescription.
+
+```python
+fit = op.fit_canonical_polynomials(
+    prescription, wavelength,
+    source_box_half=...,
+    surface_diffraction={
+        doe_surf_idx: (m_x, m_y, period_x, period_y),
+    },
+)
+```
+
+The kick obeys the standard grating equation
+`L_new = L + m_x * lambda / period_x` (and same on y) at the
+specified surface, applied AFTER refraction.  Evanescent orders
+(`L_new**2 + M_new**2 > 1`) flag rays `alive=False` with
+`error_code=RAY_EVANESCENT`.
+
+**Importantly, the OPL accumulator IS updated** with the grating's
+linear phase contribution `m * lambda * (x, y) / period` evaluated at
+the ray's DOE-plane intersection -- the "constant phase shift"
+`apply_doe_phase_traced` explicitly does NOT add but the LG
+aberration fit needs to see in order to give correct (0, 0)-piston
+phases per emitter.  Without this, the per-emitter pistons at a
+non-zero order are inconsistent with the fit's chief-ray landing,
+and the LG aberration tensor's piston channel reports nonsensical
+inter-emitter phase relationships.
+
+3 new tests in `validation/test_raytrace.py` cover the angular kick,
+the OPL contribution, and evanescent-order flagging.
+
 ## [3.3.1] — 2026-05-02
 
 ### Feature — Pre-flight grid vs prescription-aperture check

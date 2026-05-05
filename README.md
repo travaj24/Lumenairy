@@ -10,6 +10,18 @@ manipulation using the Angular Spectrum Method (ASM) and related techniques.
 
 **Author:** Andrew Traverso
 
+## What's new in 3.3.2
+
+- **Embedded grating diffraction in `trace()` and
+  `fit_canonical_polynomials`** — new `surface_diffraction` kwarg
+  pins a DOE / grating order at a specific surface inside a
+  sequential prescription.  Required to do LG-aberration-tensor or
+  asymptotic-propagator analysis at non-zero diffraction orders
+  (Dammann splitter corner orders, etc.).  Applies the angular kick
+  AND adds the DOE's linear-phase OPL contribution `m * lambda *
+  (x, y) / period` at the surface, so per-emitter (0, 0) pistons are
+  correct even at corner orders.
+
 ## What's new in 3.3.1
 
 - **Pre-flight grid-vs-aperture check** — `apply_real_lens`,

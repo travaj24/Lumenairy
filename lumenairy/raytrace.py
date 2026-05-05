@@ -644,7 +644,8 @@ def _transfer(rays, thickness, n_medium):
 # Sequential trace engine
 # ============================================================================
 
-def trace(rays, surfaces, wavelength, output_filter='all'):
+def trace(rays, surfaces, wavelength, output_filter='all',
+          surface_diffraction=None):
     """Trace a ray bundle through a sequential list of surfaces.
 
     Parameters
@@ -676,6 +677,22 @@ def trace(rays, surfaces, wavelength, output_filter='all'):
           ``None`` to skip.  Enables user-defined per-surface
           recording (e.g. store only (x, y, opd) as a
           ``NamedTuple``, or accumulate running spot centroids).
+    surface_diffraction : dict or None, optional
+        Per-surface diffractive-order kicks.  Maps surface index
+        ``i`` (zero-based) to a tuple ``(order_x, order_y, period_x,
+        period_y)`` interpreted as the grating equation::
+
+            L_new = L + order_x * wavelength / period_x
+            M_new = M + order_y * wavelength / period_y
+
+        applied AFTER refraction at surface ``i`` (so the rays
+        continue propagation through the post-surface medium with the
+        diffractive kick applied).  ``period_y`` may be ``np.inf`` for
+        a 1-D grating; ``order_x`` / ``order_y`` may be half-integer
+        (Dammann-style even-N splitters).  Orders that turn evanescent
+        (``L_new**2 + M_new**2 > 1``) are flagged
+        ``alive=False`` with ``error_code=RAY_EVANESCENT``.  See also
+        :func:`apply_doe_phase_traced`.
 
     Returns
     -------
@@ -684,6 +701,7 @@ def trace(rays, surfaces, wavelength, output_filter='all'):
     r = rays.copy()
     history = [] if output_filter != 'last' else None
     final = None
+    _diff = dict(surface_diffraction) if surface_diffraction else {}
 
     # Pre-resolve all glass indices once per wavelength.  Each
     # get_glass_index call has module-level LRU caching, so repeated
@@ -708,6 +726,50 @@ def trace(rays, surfaces, wavelength, output_filter='all'):
             _reflect(r, surf)
         else:
             _refract(r, surf, n1, n2)
+
+        # 2.5. Diffractive-order kick (if this surface is registered as
+        # a grating in surface_diffraction).  Modifies (L, M, N) in
+        # place AND adds the DOE's linear OPL contribution
+        # ``m * lambda * (x, y) / Lambda`` -- which apply_doe_phase_traced
+        # explicitly excludes but the LG aberration fit needs to see in
+        # order to give correct (0, 0) piston phases per emitter.  The
+        # linear part of this OPL is geometric and gets absorbed by the
+        # piston-coherence merit's linear fit; any non-linear part comes
+        # from the per-emitter chief rays hitting the DOE at non-paraxial
+        # positions, and is precisely the corner-frame coherence content
+        # we want the optimizer to see.
+        _diff_spec = _diff.get(i)
+        if _diff_spec is not None:
+            _mx, _my, _px, _py = _diff_spec
+            _dL = float(_mx) * wavelength / float(_px)
+            _dM = float(_my) * wavelength / float(_py)
+            r.L = r.L + _dL
+            r.M = r.M + _dM
+            _sumsq = r.L * r.L + r.M * r.M
+            _evan = _sumsq > 1.0
+            _propagating = ~_evan
+            _N_new = np.zeros_like(r.N)
+            np.sqrt(np.maximum(1.0 - _sumsq, 0.0),
+                    out=_N_new, where=_propagating)
+            # Preserve the sign of the longitudinal cosine (forward
+            # vs. backward propagation).  The original N's sign was
+            # set by the propagation direction; the diffraction kick
+            # only shifts (L, M) so the new N has the same sign.
+            r.N = np.where(r.N < 0, -_N_new, _N_new)
+            # Add the constant grating-order OPL contribution evaluated
+            # at the ray's DOE-plane intersection (x, y).  The factor
+            # ``m * lambda / period`` is the same gradient applied to
+            # (L, M) above, so this is the integral of that phase
+            # gradient evaluated at the surface.
+            r.opd = r.opd + _dL * r.x + _dM * r.y
+            if np.any(_evan) and r.alive is not None:
+                r.alive = r.alive & _propagating
+                if r.error_code is not None:
+                    r.error_code = np.where(
+                        _evan & (r.error_code == RAY_OK),
+                        np.uint8(RAY_EVANESCENT),
+                        r.error_code,
+                    )
 
         # Save state after this surface, per output_filter
         if output_filter == 'all':
