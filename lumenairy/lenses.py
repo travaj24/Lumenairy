@@ -788,6 +788,226 @@ def check_grid_vs_apertures(prescription, N, dx, *, safety_factor=1.0):
     return issues
 
 
+def recommend_grid_for_prescription(
+    prescription,
+    wavelength,
+    *,
+    source_waist=None,
+    doe_orders_max=None,
+    doe_period=None,
+    doe_to_destination_distance=None,
+    margin_ratio=1.05,
+    samples_per_wavelength=4.0,
+    samples_per_source_waist=6.0,
+    round_n_to_power_of_two=True,
+):
+    """Recommend simulation grid parameters ``(N, dx)`` for an ASM run
+    through a sequential prescription.
+
+    The recommendation answers two coupled questions before a long
+    simulation run:
+
+    * **How wide does the grid need to be?**  Determined by the largest
+      ``semi_diameter`` in the prescription, optionally extended for
+      DOE diffraction-order spread (corner-order chief rays at the
+      destination plane sit at ``m * lambda * z_propagation / period``
+      off-axis and must fit inside ``N * dx / 2``).
+
+    * **How fine does the pixel pitch need to be?**  Bounded above by
+      the wavelength's effective Nyquist (``lambda /
+      samples_per_wavelength``) and, if a source size is supplied, by
+      the source-waist resolution (``source_waist /
+      samples_per_source_waist``).
+
+    The two requirements together pin ``N`` and ``dx`` (with ``N``
+    rounded up to the nearest power of two for FFT efficiency by
+    default) such that ``N * dx / 2 >= margin_ratio * required_extent``
+    and ``dx <= min(dx_constraints)``.
+
+    Parameters
+    ----------
+    prescription : dict
+        lumenairy prescription dict.  Must include either ``elements``
+        with ``semi_diameter`` fields or a top-level ``aperture_diameter``;
+        without one of those the function raises ``ValueError``.
+    wavelength : float
+        Vacuum wavelength [m].  Sets the absolute Nyquist bound on
+        ``dx``.
+    source_waist : float, optional
+        Source 1/e Gaussian waist [m].  When supplied, ``dx`` is also
+        bounded above by ``source_waist / samples_per_source_waist`` so
+        the source itself is well-resolved on the grid.
+    doe_orders_max : (int, int) or (float, float), optional
+        Maximum diffraction-order index along (x, y) the simulation
+        will need to retain (e.g. ``(5.5, 5.5)`` for a 12 x 12 Dammann
+        splitter's diagonal corner).  Must be supplied together with
+        ``doe_period`` and ``doe_to_destination_distance`` for the
+        DOE-corner-order spread to be added to the required grid
+        extent.
+    doe_period : float or (float, float), optional
+        Grating period [m].  Scalar = isotropic; tuple = (x, y).
+    doe_to_destination_distance : float, optional
+        Free-space propagation distance from the DOE plane to the
+        destination plane that the recommendation is sizing for [m].
+    margin_ratio : float, optional
+        Multiplicative safety margin on the required grid semi
+        (default 1.05 = 5%).
+    samples_per_wavelength : float, optional
+        Minimum samples per wavelength along each grid axis (default
+        4.0).  Nyquist is 2.0; 4.0 leaves comfortable headroom for the
+        ASM kernel's exp(i*k*z*sqrt(...)) phase ramp.
+    samples_per_source_waist : float, optional
+        Minimum samples across one source waist (default 6.0).  Below
+        ~4 the Gaussian source is poorly resolved.
+    round_n_to_power_of_two : bool, optional
+        If True (default), round ``N`` up to the nearest power of two.
+        FFT-based propagators run several times faster on power-of-two
+        grids than on arbitrary sizes.
+
+    Returns
+    -------
+    dict
+        Recommendation with at least these keys:
+
+          ``N`` -- recommended grid size (int)
+          ``dx`` -- recommended pixel pitch [m]
+          ``grid_semi_m`` -- ``N * dx / 2``
+          ``required_extent_m`` -- before margin
+          ``limiting_aperture_m`` -- the surface that set the grid extent
+          ``limiting_aperture_label`` -- human-readable label of that surface
+          ``doe_extra_extent_m`` -- additional extent demanded by the DOE
+          ``dx_constraints`` -- dict of every dx upper bound considered
+          ``dx_limiting_constraint`` -- name of the binding constraint
+          ``samples_per_wavelength`` -- effective post-rounding value
+
+    Raises
+    ------
+    ValueError
+        If the prescription has no resolvable aperture, or if any of
+        ``doe_*`` are partially supplied (must be all-or-none).
+
+    See Also
+    --------
+    check_grid_vs_apertures
+        The post-flight companion that flags whether a chosen ``(N,
+        dx)`` actually contains every prescription aperture.
+    """
+    if wavelength <= 0:
+        raise ValueError(f"wavelength must be > 0, got {wavelength}")
+    if margin_ratio < 1.0:
+        raise ValueError(
+            f"margin_ratio must be >= 1.0 (got {margin_ratio}); use 1.0 "
+            "for the bare-minimum grid that just contains every aperture")
+
+    # DOE arguments are all-or-none
+    doe_args = (doe_orders_max, doe_period, doe_to_destination_distance)
+    if any(a is not None for a in doe_args) and not all(
+            a is not None for a in doe_args):
+        raise ValueError(
+            "doe_orders_max, doe_period, and doe_to_destination_distance "
+            "must all be supplied together (or all be None)")
+
+    # 1) Find the largest aperture in the prescription
+    max_semi = 0.0
+    aperture_label = ''
+    elements = prescription.get('elements')
+    if isinstance(elements, list):
+        for elem in elements:
+            if not isinstance(elem, dict):
+                continue
+            sd = elem.get('semi_diameter')
+            if sd is None or not np.isfinite(float(sd)):
+                continue
+            sd = float(sd)
+            if sd > max_semi:
+                max_semi = sd
+                lbl_parts = []
+                if elem.get('comment'):
+                    lbl_parts.append(str(elem['comment']))
+                if elem.get('surf_num') is not None:
+                    lbl_parts.append(f"surf {elem['surf_num']}")
+                aperture_label = (
+                    ' / '.join(lbl_parts) if lbl_parts
+                    else 'unknown element')
+    surfaces = prescription.get('surfaces')
+    if isinstance(surfaces, list):
+        for i, surf in enumerate(surfaces):
+            if not isinstance(surf, dict):
+                continue
+            sd = surf.get('semi_diameter')
+            if sd is None or not np.isfinite(float(sd)):
+                continue
+            sd = float(sd)
+            if sd > max_semi:
+                max_semi = sd
+                aperture_label = f"surfaces[{i}]"
+    sys_ap = prescription.get('aperture_diameter')
+    if sys_ap is not None and np.isfinite(float(sys_ap)):
+        if 0.5 * float(sys_ap) > max_semi:
+            max_semi = 0.5 * float(sys_ap)
+            aperture_label = 'system aperture_diameter'
+
+    if max_semi <= 0.0:
+        raise ValueError(
+            "prescription has no resolvable aperture: pass a prescription "
+            "whose elements / surfaces carry 'semi_diameter' or whose "
+            "top-level 'aperture_diameter' is finite")
+
+    # 2) DOE-order extent extension (if supplied)
+    doe_extra = 0.0
+    if doe_orders_max is not None:
+        m_x, m_y = doe_orders_max
+        if isinstance(doe_period, (tuple, list)):
+            period_x, period_y = (float(doe_period[0]),
+                                   float(doe_period[1]))
+        else:
+            period_x = period_y = float(doe_period)
+        if period_x <= 0 or period_y <= 0:
+            raise ValueError(f"doe_period must be > 0, got {doe_period}")
+        z_doe = float(doe_to_destination_distance)
+        # Diagonal corner order's chief-ray displacement at the
+        # destination plane (paraxial direction-cosine approximation).
+        theta_x = float(m_x) * wavelength / period_x
+        theta_y = float(m_y) * wavelength / period_y
+        doe_extra = abs(z_doe) * float(np.hypot(theta_x, theta_y))
+
+    required_extent = max_semi + doe_extra
+    required_grid_semi = margin_ratio * required_extent
+
+    # 3) dx upper bounds
+    dx_constraints = {
+        'wavelength_nyquist': float(wavelength) / float(samples_per_wavelength),
+    }
+    if source_waist is not None and float(source_waist) > 0:
+        dx_constraints['source_waist'] = (
+            float(source_waist) / float(samples_per_source_waist))
+    dx_max = min(dx_constraints.values())
+    dx_limiting = min(dx_constraints, key=dx_constraints.get)
+
+    # 4) Pick (N, dx)
+    n_min = int(np.ceil(2.0 * required_grid_semi / dx_max))
+    if round_n_to_power_of_two:
+        n = int(2 ** int(np.ceil(np.log2(max(n_min, 1)))))
+    else:
+        n = int(n_min)
+    # Recompute dx to land grid_semi exactly at required_grid_semi.
+    dx = 2.0 * required_grid_semi / n
+
+    return {
+        'N': n,
+        'dx': float(dx),
+        'grid_semi_m': float(n * dx / 2.0),
+        'required_extent_m': float(required_extent),
+        'limiting_aperture_m': float(max_semi),
+        'limiting_aperture_label': aperture_label,
+        'doe_extra_extent_m': float(doe_extra),
+        'dx_constraints': dx_constraints,
+        'dx_limiting_constraint': dx_limiting,
+        'samples_per_wavelength': float(wavelength) / float(dx),
+        'margin_ratio': float(margin_ratio),
+    }
+
+
 def _warn_if_aperture_exceeds_grid(prescription, N, dx, *,
                                     source='apply_real_lens',
                                     safety_factor=1.0,
@@ -3675,6 +3895,48 @@ def apply_real_lens_maslov(
         Number of quadrature samples per axis in the v2 direction
         cosine integral.  Maslov quadrature-validity bound:
         ``source waist >= entrance pupil diameter / n_v2``.
+    integration_method : {'quadrature', 'local_quadrature', 'stationary_phase'}, default 'quadrature'
+        Selects how the v2 integral is evaluated:
+
+        ``'quadrature'`` (default) -- Riemann sum on a Tukey-windowed
+        ``n_v2`` x ``n_v2`` uniform grid, with the v2 box centered on
+        the global ray-cloud envelope.  Correct for extended sources
+        well inside the validity bound; the ``v2`` box is the same
+        for every output pixel, so for off-axis output points where
+        the local chief tilt differs from the global one, the box
+        wastes quadrature points and may under-resolve the local
+        pupil cone.
+
+        ``'local_quadrature'`` -- per-output-pixel quadrature.
+        Newton-iterates on the OPD polynomial to find each pixel's
+        stationary point ``v2*``, computes the local Hessian, and
+        samples a ``local_n_samples`` x ``local_n_samples`` uniform
+        grid spanning ``+- local_window_sigma * sigma_k`` along
+        each Hessian eigendirection (where ``sigma_k`` is the local
+        Gaussian waist).  This is the **per-pixel v2-disk** mode
+        recommended for off-axis spot evaluation -- accuracy improves
+        substantially for extended-source field points where the
+        local chief tilt differs from the on-axis chief.  Cost is
+        ~1.5-2x ``'quadrature'`` per call.
+
+        ``'stationary_phase'`` -- leading-order asymptotic.  Per
+        pixel, Newton-locate ``v2*`` and apply the stationary-phase
+        prefactor analytically.  Fastest for delta-like integrands
+        (collimated input, geometric image) where uniform quadrature
+        silently undercounts.
+    stationary_newton_iter : int, default 12
+        Maximum Newton iterations when finding ``v2*``.  Used by both
+        ``'local_quadrature'`` and ``'stationary_phase'``.
+    stationary_newton_tol : float, default 1e-10
+        Convergence tolerance for the Newton solve.
+    local_n_samples : int, default 8
+        Per-pixel quadrature grid size when
+        ``integration_method='local_quadrature'``.
+    local_window_sigma : float, default 3.0
+        Per-pixel quadrature window half-width in units of the local
+        Gaussian waist.  ``3.0`` covers ~99.7% of the Gaussian
+        envelope; raise to ``4.0+`` if the leading-order asymptotic
+        expansion is breaking down (very-rapidly-varying OPD).
     output_subsample : int, default 1
         Evaluate the Maslov integral only on every ``output_subsample``-
         th pixel; bilinearly interpolate to the full output grid.

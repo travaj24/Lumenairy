@@ -401,6 +401,125 @@ H.run('Quadoa .qos: round-tripped prescription drives apply_real_lens',
 
 
 # ---------------------------------------------------------------------
+H.section('Geometric scaling: scale_prescription')
+
+
+def t_scale_prescription_radii_and_thicknesses():
+    """Scaling by 0.5 halves every linear dimension."""
+    pres = op.make_doublet(R1=50e-3, R2=-30e-3, R3=-80e-3,
+                           d1=4e-3, d2=2e-3,
+                           glass1='N-BK7', glass2='N-SF6HT',
+                           aperture=20e-3)
+    pres_half = op.scale_prescription(pres, 0.5)
+    radii_ok = all(
+        abs(pres_half['surfaces'][i]['radius']
+            - 0.5 * pres['surfaces'][i]['radius']) < 1e-12
+        for i in range(len(pres['surfaces']))
+        if np.isfinite(pres['surfaces'][i]['radius']))
+    thicknesses_ok = all(
+        abs(pres_half['thicknesses'][i] - 0.5 * pres['thicknesses'][i]) < 1e-12
+        for i in range(len(pres['thicknesses'])))
+    aperture_ok = (abs(pres_half['aperture_diameter']
+                       - 0.5 * pres['aperture_diameter']) < 1e-12)
+    return radii_ok and thicknesses_ok and aperture_ok, \
+        (f"radii={radii_ok}, thicknesses={thicknesses_ok}, "
+         f"aperture={aperture_ok}")
+
+
+H.run('scale_prescription: linear dimensions scale uniformly',
+      t_scale_prescription_radii_and_thicknesses)
+
+
+def t_scale_prescription_preserves_magnification():
+    """Geometric self-similarity preserves the paraxial A_p (magnification)."""
+    from lumenairy.raytrace import system_abcd_prescription
+    pres = op.make_doublet(R1=50e-3, R2=-30e-3, R3=-80e-3,
+                           d1=4e-3, d2=2e-3,
+                           glass1='N-BK7', glass2='N-SF6HT',
+                           aperture=20e-3)
+    pres['object_distance'] = 100e-3
+    M_orig, _, _, _ = system_abcd_prescription(pres, 1.31e-6)
+    pres_half = op.scale_prescription(pres, 0.5)
+    M_half, _, _, _ = system_abcd_prescription(pres_half, 1.31e-6)
+    A_orig, A_half = float(M_orig[0, 0]), float(M_half[0, 0])
+    rel_err = abs(A_orig - A_half) / max(abs(A_orig), 1e-30)
+    return rel_err < 1e-9, \
+        f'A_orig={A_orig:.7f}, A_half={A_half:.7f}, rel_err={rel_err:.2e}'
+
+
+H.run('scale_prescription: magnification A is invariant under scaling',
+      t_scale_prescription_preserves_magnification)
+
+
+def t_scale_prescription_aspheric_coeffs():
+    """A_n must scale as 1/factor**(n-1) so the surface sag
+    sum_n A_n * h^n scales linearly with factor when h does."""
+    pres = op.make_singlet(50e-3, -30e-3, 3e-3, 'N-BK7', aperture=10e-3)
+    pres['surfaces'][0]['aspheric_coeffs'] = {4: 1e-6, 6: 1e-9}
+    pres_half = op.scale_prescription(pres, 0.5)
+    A4_new = pres_half['surfaces'][0]['aspheric_coeffs'][4]
+    A6_new = pres_half['surfaces'][0]['aspheric_coeffs'][6]
+    expected_A4 = 1e-6 / (0.5 ** 3)  # / s^(n-1) = / 0.5^3 = * 8
+    expected_A6 = 1e-9 / (0.5 ** 5)  # / 0.5^5 = * 32
+    ok_A4 = abs(A4_new - expected_A4) / expected_A4 < 1e-12
+    ok_A6 = abs(A6_new - expected_A6) / expected_A6 < 1e-12
+    # Verify sag invariance: original sag at h=1mm vs scaled sag at h=0.5mm
+    h_orig = 1e-3
+    h_scaled = 0.5e-3
+    sag_orig = 1e-6 * h_orig ** 4 + 1e-9 * h_orig ** 6
+    sag_scaled = A4_new * h_scaled ** 4 + A6_new * h_scaled ** 6
+    sag_ratio = sag_scaled / sag_orig
+    sag_ok = abs(sag_ratio - 0.5) < 1e-12  # sag should also scale by 0.5
+    return ok_A4 and ok_A6 and sag_ok, \
+        (f'A4={A4_new:.4e} (exp {expected_A4:.4e}), '
+         f'A6={A6_new:.4e} (exp {expected_A6:.4e}), '
+         f'sag_ratio={sag_ratio:.6f}')
+
+
+H.run('scale_prescription: aspheric A_n scale to keep sag self-similar',
+      t_scale_prescription_aspheric_coeffs)
+
+
+def t_scale_prescription_round_trip():
+    """Scaling by s then by 1/s recovers the original to machine precision."""
+    pres = op.make_singlet(50e-3, -30e-3, 3e-3, 'N-BK7', aperture=10e-3)
+    pres['surfaces'][0]['aspheric_coeffs'] = {4: 1e-6, 6: 1e-9}
+    pres['surfaces'][0]['conic'] = -0.5
+    pres_round = op.scale_prescription(
+        op.scale_prescription(pres, 0.25), 4.0)
+    R_err = abs(pres_round['surfaces'][0]['radius']
+                - pres['surfaces'][0]['radius'])
+    A4_err = abs(pres_round['surfaces'][0]['aspheric_coeffs'][4]
+                 - pres['surfaces'][0]['aspheric_coeffs'][4])
+    k_err = abs(pres_round['surfaces'][0]['conic']
+                - pres['surfaces'][0]['conic'])
+    return (R_err < 1e-15 and A4_err < 1e-12 * 1e-6 and k_err < 1e-15), \
+        f'R_err={R_err:.2e}, A4_err={A4_err:.2e}, k_err={k_err:.2e}'
+
+
+H.run('scale_prescription: round-trip s then 1/s recovers original',
+      t_scale_prescription_round_trip)
+
+
+def t_scale_prescription_invalid_factor():
+    """factor <= 0 or non-finite must raise ValueError."""
+    pres = op.make_singlet(50e-3, -30e-3, 3e-3, 'N-BK7', aperture=10e-3)
+    raised = []
+    for bad in (0, -1, np.inf, np.nan):
+        try:
+            op.scale_prescription(pres, bad)
+        except ValueError:
+            raised.append(True)
+        else:
+            raised.append(False)
+    return all(raised), f'all_raised={all(raised)} (per-input: {raised})'
+
+
+H.run('scale_prescription: rejects non-finite or non-positive factor',
+      t_scale_prescription_invalid_factor)
+
+
+# ---------------------------------------------------------------------
 H.section('User library')
 
 

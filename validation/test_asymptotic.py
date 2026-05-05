@@ -988,5 +988,42 @@ H.run('LGAberrationMerit: handles bad prescription gracefully',
       t_lg_merit_handles_bad_prescription)
 
 
+def t_fit_endpoint_anchored_default_off():
+    """Default endpoint_anchored=False produces fit results identical
+    to existing behaviour; passing True changes the fit slightly but
+    keeps it valid."""
+    from lumenairy.asymptotic import fit_canonical_polynomials
+    pres = op.make_singlet(50e-3, -50e-3, 3e-3, 'N-BK7', aperture=8e-3)
+    pres['object_distance'] = 50e-3
+    common = dict(
+        wavelength=1.31e-6,
+        source_box_half=200e-6,
+        pupil_box_half=0.05,
+        n_field=6, n_pupil=6,
+        poly_order=4,
+        object_distance=50e-3,
+    )
+    fit_default = fit_canonical_polynomials(pres, **common)
+    fit_anchored = fit_canonical_polynomials(
+        pres, **common, endpoint_anchored=True)
+    # Both fits must produce finite Phi residuals
+    ok_def = math.isfinite(fit_default.res_phi_rms_waves)
+    ok_anc = math.isfinite(fit_anchored.res_phi_rms_waves)
+    # The anchored fit should typically have a SMALL difference in
+    # residual -- usually within 2x of the default at this poly_order
+    rms_def = fit_default.res_phi_rms_waves
+    rms_anc = fit_anchored.res_phi_rms_waves
+    ratio = (rms_anc / rms_def) if rms_def > 0 else 1.0
+    sane = 0.1 < ratio < 10.0
+    return ok_def and ok_anc and sane, (
+        f'rms_default={rms_def:.4e}, rms_anchored={rms_anc:.4e}, '
+        f'ratio={ratio:.3f}'
+    )
+
+
+H.run('fit_canonical_polynomials: endpoint_anchored option produces valid fit',
+      t_fit_endpoint_anchored_default_off)
+
+
 if __name__ == '__main__':
     sys.exit(H.summary())

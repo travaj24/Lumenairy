@@ -10,6 +10,7 @@ resolved at runtime by the propagation engine.
 Author: Andrew Traverso
 """
 
+import copy
 import os
 import warnings
 
@@ -2045,3 +2046,143 @@ def load_quadoa_qos(filepath, name=None):
     if semi_diameters:
         result['has_semi_diameters'] = True
     return result
+
+
+# ============================================================================
+# Geometric scaling
+# ============================================================================
+
+
+def scale_prescription(prescription, factor):
+    """Geometric self-similarity: return a deep-copied prescription
+    whose every linear dimension is multiplied by ``factor``.
+
+    The scaled system has the **same F-number, NA, paraxial
+    magnification, and diffraction-limited spot size in absolute
+    units** as the original (because wavelength is not scaled).  Use
+    cases:
+
+    * Unit conversion (e.g. ``factor=1e-3`` to convert a prescription
+      built in millimetres to the SI metres convention).
+    * Speeding up ray-trace + polynomial-fit-based diffraction
+      methods (``fit_canonical_polynomials``,
+      ``aberration_tensor``, ``propagate_modal_asymptotic``) where
+      the absolute output pixel count for a given Nyquist
+      sampling scales with the system's physical extent.  Optimisation
+      loops that re-fit per merit-evaluation can be 4 - 16 times
+      cheaper when the fit's source / output box shrinks.
+    * Building geometrically-similar test prescriptions
+      (e.g. a 0.25x-scale replica for fast smoke tests).
+
+    The function scales:
+
+    * ``aperture_diameter`` (top-level) and every ``semi_diameter``
+      on ``elements`` and ``surfaces``;
+    * ``object_distance``;
+    * every entry in ``thicknesses`` and ``all_thicknesses``;
+    * every ``radius`` / ``radius_y`` on each surface and element;
+    * each entry in ``coord_breaks``'s ``decenter_x_m``,
+      ``decenter_y_m``, and ``thickness_m``;
+    * every aspheric coefficient ``A_n`` as ``A_n / factor**(n - 1)``,
+      so the surface sag ``sum_n A_n * h**n`` scales linearly with
+      ``factor`` when ``h`` does.
+
+    The function does NOT scale (these are dimensionless or
+    wavelength-relative): ``conic`` / ``conic_y`` constants, glass
+    names, tilt angles in coord breaks, stop indices, wavelength
+    metadata.  ``DAMMANN_PERIODX`` / ``DAMMANN_PERIODY`` aren't part
+    of the prescription dict and are also not touched.
+
+    Parameters
+    ----------
+    prescription : dict
+        lumenairy prescription dict (any builder / loader output).
+        Not modified.
+    factor : float
+        Linear scale factor.  Must be finite and positive.  ``> 1``
+        enlarges; ``< 1`` shrinks.
+
+    Returns
+    -------
+    dict
+        Deep-copied scaled prescription.  Round-trips through
+        ``apply_real_lens`` / ``fit_canonical_polynomials`` /
+        ``aberration_tensor`` exactly the same as the original up to
+        the chosen scale.
+
+    Examples
+    --------
+    >>> import lumenairy as op
+    >>> rx = op.make_singlet(50e-3, -50e-3, 4e-3, 'N-BK7', aperture=10e-3)
+    >>> rx_small = op.scale_prescription(rx, 0.25)
+    >>> rx_small['surfaces'][0]['radius']  # 50 mm * 0.25 = 12.5 mm
+    0.0125
+    >>> rx_small['aperture_diameter']      # 10 mm * 0.25 = 2.5 mm
+    0.0025
+
+    See Also
+    --------
+    recommend_grid_for_prescription
+        Pre-flight grid sizer that uses the same scaling identity
+        when comparing simulation cost across scaled designs.
+    """
+    if not np.isfinite(factor) or factor <= 0:
+        raise ValueError(
+            f"factor must be finite and > 0, got {factor!r}")
+
+    rx = copy.deepcopy(prescription)
+    s = float(factor)
+
+    # Top-level scalars
+    if rx.get('aperture_diameter') is not None:
+        rx['aperture_diameter'] = float(rx['aperture_diameter']) * s
+    if rx.get('object_distance') is not None:
+        rx['object_distance'] = float(rx['object_distance']) * s
+
+    # Thickness lists
+    for tkey in ('thicknesses', 'all_thicknesses'):
+        if tkey in rx and rx[tkey]:
+            rx[tkey] = [
+                (float(t) * s if t is not None else t) for t in rx[tkey]
+            ]
+
+    # Per-surface and per-element scaling
+    def _scale_surface_like(d):
+        if not isinstance(d, dict):
+            return
+        for rkey in ('radius', 'radius_y'):
+            if d.get(rkey) is not None:
+                v = d[rkey]
+                if np.isfinite(v):
+                    d[rkey] = float(v) * s
+                # Inf radii (flat surfaces) stay Inf
+        if d.get('semi_diameter') is not None:
+            sd = d['semi_diameter']
+            if np.isfinite(sd):
+                d['semi_diameter'] = float(sd) * s
+        for ackey in ('aspheric_coeffs', 'aspheric_coeffs_y'):
+            ac = d.get(ackey)
+            if isinstance(ac, dict):
+                d[ackey] = {
+                    int(n): float(v) / (s ** (int(n) - 1))
+                    for n, v in ac.items()
+                }
+
+    if isinstance(rx.get('surfaces'), list):
+        for surf in rx['surfaces']:
+            _scale_surface_like(surf)
+    if isinstance(rx.get('elements'), list):
+        for elem in rx['elements']:
+            _scale_surface_like(elem)
+
+    # Coord breaks: decenters and explicit thicknesses scale; tilts don't
+    if isinstance(rx.get('coord_breaks'), list):
+        for cb in rx['coord_breaks']:
+            if not isinstance(cb, dict):
+                continue
+            for dkey in ('decenter_x_m', 'decenter_y_m', 'thickness_m'):
+                if cb.get(dkey) is not None:
+                    cb[dkey] = float(cb[dkey]) * s
+
+    return rx
+

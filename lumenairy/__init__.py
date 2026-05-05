@@ -73,6 +73,7 @@ from .lenses import (
     apply_grin_lens,
     apply_axicon,
     check_grid_vs_apertures,
+    recommend_grid_for_prescription,
 )
 from .lenses import apply_real_lens_maslov
 
@@ -340,6 +341,7 @@ from .prescriptions import (
     export_quadoa_qos,
     load_quadoa_qos,
     QUADOA_SCHEMA_VERSION,
+    scale_prescription,
     THORLABS_CATALOG,
 )
 
@@ -456,7 +458,7 @@ from .plotting import (
     compute_jones_pupil,
 )
 
-__version__ = "3.3.2"
+__version__ = "3.3.3"
 
 __all__ = [
     # Propagation
@@ -488,6 +490,7 @@ __all__ = [
     'apply_grin_lens',
     'apply_axicon',
     'check_grid_vs_apertures',
+    'recommend_grid_for_prescription',
     # Glass
     'get_glass_index',
     'get_glass_index_complex',
@@ -721,6 +724,7 @@ __all__ = [
     'export_quadoa_qos',
     'load_quadoa_qos',
     'QUADOA_SCHEMA_VERSION',
+    'scale_prescription',
     'make_singlet',
     'make_doublet',
     'thorlabs_lens',

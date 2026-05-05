@@ -2,6 +2,67 @@
 
 All notable changes to the core library are documented here.
 
+## [3.3.3] — 2026-05-05
+
+### Feature — `recommend_grid_for_prescription`
+
+Design-time companion to `check_grid_vs_apertures` that *recommends*
+a grid (`N`, `dx`) instead of just *checking* one.  Given a
+prescription, wavelength, source waist, and (optionally) the DOE
+order range / period / DOE-to-destination distance, returns the
+required half-extent and a sampling pitch that keeps the source
+Gaussian, every surface aperture, and every DOE diffraction order
+inside the grid with margin.  Optionally rounds `N` to the next
+power of two for FFT-friendly sizing.
+
+```python
+rec = op.recommend_grid_for_prescription(
+    prescription, wavelength,
+    source_waist=120e-6,
+    doe_orders_max=8,
+    doe_period=2.5e-6,
+    doe_to_destination_distance=300e-3,
+)
+N, dx = rec['N'], rec['dx']
+```
+
+The output round-trips with `check_grid_vs_apertures` (no warnings
+fired at the recommended grid).
+
+### Feature — `scale_prescription`
+
+Geometric self-similarity utility that scales a prescription by a
+single factor, preserving F-number, NA, and magnification.  Scales
+aperture diameter, semi-diameters, object distance, all thicknesses,
+all radii (including biconic Y), aspheric coefficients
+(`A_n / factor**(n-1)` so `A_n * r**n` is invariant under
+`r -> r * factor`), and coordinate-break decenters/thicknesses.
+Does *not* scale conics, glass identities, tilts, or wavelength
+(those are scale-free).  Useful for swapping between mm-scale and
+m-scale designs without re-deriving every surface field.
+
+```python
+big = op.scale_prescription(small, factor=10.0)  # 10x linear
+```
+
+### Feature — Endpoint-anchored Chebyshev nodes for `fit_canonical_polynomials`
+
+New `endpoint_anchored=False` kwarg on `fit_canonical_polynomials`.
+When `True`, the Chebyshev-Gauss roots are rescaled so the outermost
+node sits exactly on the [-1, 1] boundary.  This gives lower max
+error for fits whose support is the full source / pupil box (vs.
+the standard Gauss roots, which leave a gap to the edge).  Defaults
+to `False` to preserve existing fit numerics.
+
+### Docs — `apply_real_lens_maslov` integration modes
+
+Expanded the `integration_method` docstring to fully document all
+three modes — `'quadrature'` (current default), `'local_quadrature'`
+(per-pixel v2-disk via Newton + Hessian; more rigorous than a global
+linear fit at the cost of one Newton solve per output pixel), and
+`'stationary_phase'` (zeroth-order saddle).  The library always had
+all three; the discoverability of `'local_quadrature'` was poor.
+
 ## [3.3.2] — 2026-05-04
 
 ### Feature — Embedded grating diffraction in `trace()` and `fit_canonical_polynomials`

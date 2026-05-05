@@ -671,6 +671,97 @@ H.run('apply_real_lens: warns when aperture > grid',
       t_apply_real_lens_warns_when_aperture_exceeds_grid)
 
 
+def t_recommend_grid_basic():
+    """`recommend_grid_for_prescription` returns an (N, dx) that
+    actually contains the largest aperture and is a power of two."""
+    pres = op.make_singlet(50e-3, np.inf, 4e-3, 'N-BK7', aperture=10e-3)
+    rec = op.recommend_grid_for_prescription(pres, wavelength=1.31e-6)
+    n_is_power_of_two = (rec['N'] & (rec['N'] - 1)) == 0
+    fits = rec['grid_semi_m'] >= rec['limiting_aperture_m']
+    dx_below_nyquist = rec['dx'] <= rec['dx_constraints']['wavelength_nyquist']
+    return (n_is_power_of_two and fits and dx_below_nyquist), \
+        (f"N={rec['N']}, dx={rec['dx']*1e6:.3f} um, "
+         f"grid_semi={rec['grid_semi_m']*1e3:.3f} mm, "
+         f"limiting={rec['limiting_aperture_m']*1e3:.3f} mm")
+
+
+H.run('recommend_grid: basic (N power of 2, fits aperture, dx <= nyquist)',
+      t_recommend_grid_basic)
+
+
+def t_recommend_grid_doe_extends_extent():
+    """When DOE corner-order spread is added, the recommended grid
+    semi must exceed the bare aperture by at least the DOE extra."""
+    pres = op.make_singlet(50e-3, -50e-3, 3e-3, 'N-BK7', aperture=10e-3)
+    rec_no_doe = op.recommend_grid_for_prescription(pres, 1.31e-6)
+    rec_doe = op.recommend_grid_for_prescription(
+        pres, 1.31e-6,
+        doe_orders_max=(5.5, 5.5),
+        doe_period=70e-6,
+        doe_to_destination_distance=20e-3)
+    extra_added = rec_doe['doe_extra_extent_m'] > 0
+    grid_grew = rec_doe['grid_semi_m'] >= rec_no_doe['grid_semi_m']
+    return extra_added and grid_grew, \
+        (f"no_doe semi={rec_no_doe['grid_semi_m']*1e3:.2f} mm, "
+         f"with_doe semi={rec_doe['grid_semi_m']*1e3:.2f} mm, "
+         f"extra={rec_doe['doe_extra_extent_m']*1e3:.3f} mm")
+
+
+H.run('recommend_grid: DOE corner orders extend the required extent',
+      t_recommend_grid_doe_extends_extent)
+
+
+def t_recommend_grid_source_waist_caps_dx():
+    """When source_waist is supplied and tighter than the wavelength
+    Nyquist bound, dx is capped by the source waist constraint."""
+    pres = op.make_singlet(50e-3, np.inf, 4e-3, 'N-BK7', aperture=10e-3)
+    # 2 um source waist, 1.31 um wavelength
+    # source bound: 2/6 = 0.333 um
+    # wavelength bound: 1.31/4 = 0.328 um -- nyquist binds first
+    # 0.5 um source waist:
+    # source bound: 0.5/6 = 0.083 um -- source binds
+    rec = op.recommend_grid_for_prescription(
+        pres, wavelength=1.31e-6, source_waist=0.5e-6)
+    bound = rec['dx_limiting_constraint']
+    return bound == 'source_waist', \
+        f'limiting constraint: {bound!r}'
+
+
+H.run('recommend_grid: source_waist binds when tight enough',
+      t_recommend_grid_source_waist_caps_dx)
+
+
+def t_recommend_grid_round_trips_with_check():
+    """The recommended (N, dx) must satisfy `check_grid_vs_apertures`
+    (no surface should still exceed the recommended grid)."""
+    pres = op.make_singlet(50e-3, -30e-3, 3e-3, 'N-BK7', aperture=15e-3)
+    rec = op.recommend_grid_for_prescription(pres, 1.31e-6,
+                                              margin_ratio=1.05)
+    issues = op.check_grid_vs_apertures(pres, rec['N'], rec['dx'])
+    return len(issues) == 0, \
+        f"N={rec['N']}, dx={rec['dx']*1e6:.3f} um, " \
+        f"check_grid_vs_apertures issues={len(issues)}"
+
+
+H.run('recommend_grid: result passes check_grid_vs_apertures',
+      t_recommend_grid_round_trips_with_check)
+
+
+def t_recommend_grid_doe_args_all_or_none():
+    """Partial DOE arguments must raise ValueError."""
+    pres = op.make_singlet(50e-3, np.inf, 4e-3, 'N-BK7', aperture=10e-3)
+    try:
+        op.recommend_grid_for_prescription(
+            pres, 1.31e-6, doe_orders_max=(5, 5))  # missing the others
+    except ValueError as e:
+        return True, f'ValueError raised: {e}'
+    return False, 'expected ValueError, got nothing'
+
+
+H.run('recommend_grid: partial DOE args raise ValueError',
+      t_recommend_grid_doe_args_all_or_none)
+
+
 def t_axicon_makes_bessel_intensity_pattern():
     """An axicon focused over its depth-of-focus produces an on-axis
     bright line; intensity at a non-zero z stays > 0."""

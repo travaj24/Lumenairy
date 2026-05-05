@@ -10,6 +10,38 @@ manipulation using the Angular Spectrum Method (ASM) and related techniques.
 
 **Author:** Andrew Traverso
 
+## What's new in 3.3.3
+
+- **`recommend_grid_for_prescription`** — design-time companion to
+  `check_grid_vs_apertures` that returns a recommended `(N, dx)`
+  given a prescription, wavelength, source waist, and (optionally)
+  DOE order range / period / DOE-to-destination distance.  The
+  recommendation rounds `N` to a power of two by default and
+  round-trips cleanly with `check_grid_vs_apertures` (no warnings
+  fired at the recommended grid).
+
+- **`scale_prescription(prescription, factor)`** — single-factor
+  geometric self-similarity utility.  Scales radii, thicknesses,
+  aperture / semi-diameters, object distance, aspheric coefficients
+  (`A_n / factor**(n-1)`), and coord-break decenters; preserves
+  conics, glasses, tilts, and wavelength.  F-number, NA, and
+  magnification are invariant.  Useful for swapping between mm and
+  m scales without re-deriving every surface.
+
+- **Endpoint-anchored Chebyshev nodes** in
+  `fit_canonical_polynomials` — opt-in `endpoint_anchored=True`
+  kwarg rescales the Chebyshev-Gauss roots so the outermost node
+  sits exactly on the [-1, 1] boundary, lowering max error when
+  the fit support is the full source / pupil box.  Defaults to
+  `False` to preserve existing numerics.
+
+- **Documented `integration_method='local_quadrature'`** in
+  `apply_real_lens_maslov` — per-pixel v2-disk integration via
+  Newton + Hessian (more rigorous than a global linear fit at the
+  cost of one Newton solve per output pixel).  Already existed in
+  the library; the docstring now fully covers all three integration
+  modes (`'quadrature'`, `'local_quadrature'`, `'stationary_phase'`).
+
 ## What's new in 3.3.2
 
 - **Embedded grating diffraction in `trace()` and

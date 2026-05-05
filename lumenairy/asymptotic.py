@@ -671,6 +671,7 @@ def fit_canonical_polynomials(
     extract_linear_phase: bool = True,
     object_distance: Optional[float] = None,
     surface_diffraction: Optional[Dict[int, Tuple[float, float, float, float]]] = None,
+    endpoint_anchored: bool = False,
 ) -> CanonicalPolyFit:
     """Fit Chebyshev tensor-product polynomials to ``Phi(s2, v2)`` and
     ``s1(s2, v2)`` over a 4-D source x pupil grid (paper 1, Section 3).
@@ -732,6 +733,18 @@ def fit_canonical_polynomials(
         :func:`aberration_tensor` evaluations at that order's frame
         centres reflect the true diffractive wavefront.  See also
         :func:`lumenairy.raytrace.apply_doe_phase_traced`.
+    endpoint_anchored : bool, optional
+        If True, the Chebyshev sampling nodes for the input source-
+        plane and pupil-direction-cosine grids are rescaled so the
+        outermost two nodes per axis sit exactly at ``+- box_half``
+        instead of slightly inside (``cos(pi/(2*N)) * box_half``).
+        Equivalent to ``cos((k + 1/2)*pi / N) / cos(pi/(2*N))``.
+        Marginally extends the fit's training-data support to the box
+        edge; the conditioning hit on the least-squares fit is
+        negligible at typical ``poly_order`` (4 - 6) but the fit
+        coefficients change very slightly so this is opt-in for
+        bit-compatibility with prior fits.  Default ``False`` (use
+        the standard Chebyshev-Gauss roots).
 
     Returns
     -------
@@ -763,7 +776,14 @@ def fit_canonical_polynomials(
     # 4-D Chebyshev-node grid:  (s1_x, s1_y) x (v1_x, v1_y).
     def cheb_nodes(n: int) -> np.ndarray:
         i = np.arange(n)
-        return np.cos(np.pi * (i + 0.5) / n)
+        x = np.cos(np.pi * (i + 0.5) / n)
+        if endpoint_anchored and n >= 2:
+            # Rescale so outermost nodes sit at exactly +-1 instead of
+            # +-cos(pi/(2n)).  Outermost training samples then graze the
+            # box edge.  Conditioning hit negligible for poly_order <= 6
+            # with 6+ samples per axis.
+            x = x / np.cos(np.pi / (2.0 * n))
+        return x
 
     u_field = cheb_nodes(n_field)        # in (-1, 1)
     u_pupil = cheb_nodes(n_pupil)
